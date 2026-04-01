@@ -1,0 +1,76 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "id": "src/analyzers/dag_config_parser.py"
+    },
+    {
+      "id": "operator"
+    },
+    {
+      "name": "task_b",
+      "storage_type": "table",
+      "schema_snapshot": null,
+      "freshness_sla": null,
+      "owner": null,
+      "is_source_of_truth": false,
+      "id": "task_b"
+    },
+    {
+      "name": "task_a",
+      "storage_type": "table",
+      "schema_snapshot": null,
+      "freshness_sla": null,
+      "owner": null,
+      "is_source_of_truth": false,
+      "id": "task_a"
+    },
+    {
+      "name": "t1",
+      "storage_type": "table",
+      "schema_snapshot": null,
+      "freshness_sla": null,
+      "owner": null,
+      "is_source_of_truth": false,
+      "id": "t1"
+    },
+    {
+      "id": "tests/unit/analyzers/test_dag_config_parser.py"
+    },
+    {
+      "id": "t2"
+    }
+  ],
+  "edges": [
+    {
+      "edge_type": "CONFIGURES",
+      "transformation_type": "config",
+      "source_file": "src/analyzers/dag_config_parser.py",
+      "source": "src/analyzers/dag_config_parser.py",
+      "target": "operator"
+    },
+    {
+      "edge_type": "CONFIGURES",
+      "transformation_type": "config",
+      "source_file": "src/analyzers/dag_config_parser.py",
+      "source": "src/analyzers/dag_config_parser.py",
+      "target": "task_b"
+    },
+    {
+      "edge_type": "CONFIGURES",
+      "transformation_type": "config",
+      "source_file": "tests/unit/analyzers/test_dag_config_parser.py",
+      "source": "tests/unit/analyzers/test_dag_config_parser.py",
+      "target": "task_b"
+    },
+    {
+      "edge_type": "CONFIGURES",
+      "transformation_type": "config",
+      "source_file": "tests/unit/analyzers/test_dag_config_parser.py",
+      "source": "tests/unit/analyzers/test_dag_config_parser.py",
+      "target": "t2"
+    }
+  ]
+}

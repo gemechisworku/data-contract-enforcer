@@ -1,0 +1,60 @@
+{
+  "files": [
+    {
+      "path": "outputs/traces/run.jsonl",
+      "keys": [
+        "inputs",
+        "langsmith",
+        "metadata",
+        "outputs"
+      ]
+    },
+    {
+      "path": "outputs/week1/intent_records.jsonl",
+      "keys": [
+        "contributor",
+        "files",
+        "id",
+        "intent_id",
+        "mutation_class",
+        "params",
+        "timestamp",
+        "tool",
+        "tool_use_id",
+        "vcs"
+      ]
+    },
+    {
+      "path": "outputs/week3/extractions.jsonl",
+      "keys": [
+        "confidence_score",
+        "cost_estimate",
+        "doc_id",
+        "escalated_from",
+        "processing_time",
+        "strategy_used",
+        "timestamp_utc"
+      ]
+    },
+    {
+      "path": "outputs/week4/lineage_snapshotsjsonl",
+      "keys": [
+        "directed",
+        "edges",
+        "graph",
+        "multigraph",
+        "nodes"
+      ]
+    },
+    {
+      "path": "outputs/week5/events.jsonl",
+      "keys": [
+        "event_type",
+        "event_version",
+        "payload",
+        "recorded_at",
+        "stream_id"
+      ]
+    }
+  ]
+}
