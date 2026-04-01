@@ -1,0 +1,76 @@
+id: week3-document-refinery-extractions
+version: 1.0.0
+domain: fde-training
+schema:
+- name: doc_id
+  description: 'Profiled column `doc_id`: pandas dtype str, ~0.00% nulls, cardinality
+    ~33.'
+  type: string
+  required: true
+  format: uuid
+  pattern: ^[0-9a-fA-F-]{36}$
+- name: source_path
+  description: 'Profiled column `source_path`: pandas dtype str, ~0.00% nulls, cardinality
+    ~1.'
+  type: string
+  required: true
+- name: source_hash
+  description: 'Profiled column `source_hash`: pandas dtype str, ~0.00% nulls, cardinality
+    ~33.'
+  type: string
+  required: true
+- name: extraction_model
+  description: 'Profiled column `extraction_model`: pandas dtype str, ~0.00% nulls,
+    cardinality ~1.'
+  type: string
+  required: true
+- name: processing_time_ms
+  description: 'Profiled column `processing_time_ms`: pandas dtype int64, ~0.00% nulls,
+    cardinality ~24.'
+  type: integer
+  required: true
+- name: extracted_at
+  description: 'Profiled column `extracted_at`: pandas dtype str, ~0.00% nulls, cardinality
+    ~26.'
+  type: string
+  required: true
+  format: date-time
+- name: fact_fact_id
+  description: 'Profiled column `fact_fact_id`: pandas dtype str, ~0.00% nulls, cardinality
+    ~33.'
+  type: string
+  required: true
+  format: uuid
+  pattern: ^[0-9a-fA-F-]{36}$
+- name: fact_text
+  description: 'Profiled column `fact_text`: pandas dtype str, ~0.00% nulls, cardinality
+    ~33.'
+  type: string
+  required: true
+- name: fact_entity_refs
+  description: 'Profiled column `fact_entity_refs`: pandas dtype object, ~0.00% nulls,
+    cardinality ~1.'
+  type: string
+  required: true
+  enum:
+  - '[]'
+- name: fact_confidence
+  description: Confidence score. Must remain 0.0–1.0 float. BREAKING if changed to
+    integer 0–100 or different scale.
+  type: number
+  required: true
+  minimum: 0.0
+  maximum: 1.0
+- name: fact_page_ref
+  description: 'Profiled column `fact_page_ref`: pandas dtype object, ~100.00% nulls,
+    cardinality ~0.'
+  type: string
+  required: false
+- name: fact_source_excerpt
+  description: 'Profiled column `fact_source_excerpt`: pandas dtype str, ~0.00% nulls,
+    cardinality ~1.'
+  type: string
+  required: true
+lineage:
+  upstream: []
+  downstream: []
