@@ -106,6 +106,9 @@ This file is a **key index** produced by `scripts/check_keys.py`, not a canonica
 
 **Bitol-compatible YAML clause (ODCS-style schema)** — lock `extracted_facts[].confidence` to float in [0, 1] so a 0–100 integer cannot ship downstream:
 
+PS D:\FDE-Training\data-contract-enforcer> uv run scripts/check_score.py
+min=0.000 max=0.896 mean=0.388
+
 ```yaml
 apiVersion: v3
 kind: data-contract
