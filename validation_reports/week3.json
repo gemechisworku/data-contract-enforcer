@@ -1,0 +1,21 @@
+{
+  "runner": "ValidationRunner",
+  "timestamp_utc": "2026-04-01T20:22:30.506905Z",
+  "structural": [],
+  "statistical": [
+    {
+      "check": "statistical_drift",
+      "field": "processing_time_ms",
+      "status": "PASS",
+      "z_score": 0.0
+    },
+    {
+      "check": "statistical_drift",
+      "field": "fact_confidence",
+      "status": "PASS",
+      "z_score": 0.0
+    }
+  ],
+  "errors": [],
+  "overall": "PASS"
+}

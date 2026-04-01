@@ -1,0 +1,26 @@
+# Stub: regenerate with ContractGenerator when outputs/week4/lineage_snapshots.jsonl matches canonical lineage_snapshot envelope.
+kind: DataContract
+apiVersion: v3.0.0
+id: week4-lineage-snapshot
+info:
+  title: Week 4 Brownfield Cartographer — Lineage Snapshot
+  version: 0.0.1
+  owner: week4-team
+  description: Placeholder. Actual file may be NetworkX-style graph JSON (see DOMAIN_NOTES).
+servers:
+  local:
+    type: local
+    path: outputs/week4/lineage_snapshots.jsonl
+    format: jsonl
+terms:
+  usage: Internal only.
+  limitations: Node/edge schema must align with canonical_schema Week 4 before enforcement.
+schema: {}
+quality:
+  type: SodaChecks
+  specification:
+    checks for week4_lineage:
+      - row_count >= 0
+lineage:
+  upstream: []
+  downstream: []

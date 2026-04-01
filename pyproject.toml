@@ -6,3 +6,6 @@ dependencies = [
     "pandas>=2.0",
     "pyyaml>=6.0",
 ]
+
+[project.optional-dependencies]
+profiling = ["ydata-profiling>=4.0"]

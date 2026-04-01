@@ -1,22 +1,54 @@
-# contracts/generator.py — ContractGenerator (Stages 1–4)
+# contracts/generator.py — ContractGenerator (course pipeline Steps 1–5)
 """
+Reads outputs/ JSONL (+ Week 4 lineage), emits Bitol DataContract YAML + parallel dbt schema fragment.
+
 Usage:
-  python contracts/generator.py \\
-    --source outputs/week3/extractions.jsonl \\
-    --contract-id week3-document-refinery-extractions \\
-    --lineage outputs/week4/lineage_snapshots.jsonl \\
-    --output generated_contracts/
+  python contracts/generator.py --preset week3
+  python contracts/generator.py --preset week5
+  python contracts/generator.py --source outputs/week3/extractions.jsonl --file-stem week3_extractions \\
+      --contract-id week3-document-refinery-extractions --lineage outputs/week4/lineage_snapshots.jsonl
+
+Optional: pip install ydata-profiling  (Step 1 extended: HTML profile to schema_snapshots/)
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import yaml
-from pathlib import Path
+
+from dbt_emit import emit_dbt_schema_yml
+
+# --- Presets (evaluation layout: generated_contracts/week3_extractions.yaml, week5_events.yaml) ---
+
+PRESETS: dict[str, dict[str, Any]] = {
+    "week3": {
+        # Canonical nested extraction_record shape (matches ValidationRunner migrate path).
+        "source": Path("outputs/migrate/week3/extractions.jsonl"),
+        "contract_id": "week3-document-refinery-extractions",
+        "file_stem": "week3_extractions",
+        "title": "Week 3 Document Refinery — Extraction Records",
+        "owner": "week3-team",
+        "dbt_model": "stg_week3_extractions",
+        "flatten": "extraction",
+    },
+    "week5": {
+        # Migrated canonical event_record shape (richer than legacy outputs/week5/events.jsonl).
+        "source": Path("outputs/migrate/week5/events.jsonl"),
+        "contract_id": "week5-event-sourcing-events",
+        "file_stem": "week5_events",
+        "title": "Week 5 Event Sourcing — Event Records",
+        "owner": "week5-team",
+        "dbt_model": "stg_week5_events",
+        "flatten": "events",
+    },
+}
 
 
 def load_jsonl(path: str | Path) -> list[dict]:
@@ -24,9 +56,19 @@ def load_jsonl(path: str | Path) -> list[dict]:
         return [json.loads(l) for l in f if l.strip()]
 
 
+def load_lineage_snapshot(path: Path) -> dict:
+    raw = path.read_text(encoding="utf-8").strip()
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        lines = [ln for ln in raw.splitlines() if ln.strip()]
+        return json.loads(lines[-1])
+
+
 def flatten_for_profile(records: list[dict]) -> pd.DataFrame:
-    """Flatten nested JSONL to a flat DataFrame for profiling.
-    For arrays like extracted_facts[], explode to one row per item."""
+    """Explode extracted_facts to one row per fact (flattened fact_* columns)."""
     rows = []
     for r in records:
         base = {k: v for k, v in r.items() if not isinstance(v, (list, dict))}
@@ -35,15 +77,27 @@ def flatten_for_profile(records: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def flatten_for_events(records: list[dict]) -> pd.DataFrame:
+    """One row per event; nested dict/list columns JSON-serialized for profiling."""
+    rows = []
+    for r in records:
+        row: dict[str, Any] = {}
+        for k, v in r.items():
+            if isinstance(v, (dict, list)):
+                row[k] = json.dumps(v, sort_keys=True)
+            else:
+                row[k] = v
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def _series_for_uniques(series: pd.Series) -> pd.Series:
-    """Map list/dict cells to JSON strings so nunique/unique work."""
     return series.map(
         lambda x: json.dumps(x, sort_keys=True) if isinstance(x, (list, dict)) else x
     )
 
 
 def profile_column(series: pd.Series, col_name: str) -> dict:
-    """Structural profiling per column (Stage 2). Handles unhashable list cells."""
     try:
         nuniq = int(series.nunique())
         uniq_head = series.dropna().unique()[:5]
@@ -53,7 +107,7 @@ def profile_column(series: pd.Series, col_name: str) -> dict:
         nuniq = int(work.nunique())
         uniq_head = work.dropna().unique()[:5]
 
-    result = {
+    result: dict[str, Any] = {
         "name": col_name,
         "dtype": str(series.dtype),
         "null_fraction": float(series.isna().mean()),
@@ -61,7 +115,6 @@ def profile_column(series: pd.Series, col_name: str) -> dict:
         "sample_values": [str(v) for v in uniq_head],
     }
 
-    # Enum eligibility: cardinality <= 10, object dtype, full domain enumerated
     if str(series.dtype) == "object" and nuniq <= 10:
         work = _series_for_uniques(series)
         all_vals = sorted({str(v) for v in work.dropna().unique()})
@@ -96,138 +149,306 @@ def infer_type(dtype_str: str) -> str:
     return mapping.get(dtype_str, "string")
 
 
-def column_to_clause(profile: dict) -> dict:
-    """Translate one column profile to a Bitol-style JSON-schema clause (Stage 3)."""
-    dtype_str = profile["dtype"]
-    clause: dict = {
-        "name": profile["name"],
-        "description": f"Profiled column `{profile['name']}`: pandas dtype {dtype_str}, "
-        f"~{profile['null_fraction']:.2%} nulls, cardinality ~{profile['cardinality_estimate']}.",
-        "type": infer_type(dtype_str),
-        "required": profile["null_fraction"] == 0.0,
-    }
-
-    # Confidence: float range 0–1 (spec: dtype float64 AND name contains 'confidence')
-    if "confidence" in profile["name"] and clause["type"] == "number":
-        clause["minimum"] = 0.0
-        clause["maximum"] = 1.0
-        clause["description"] = (
-            "Confidence score. Must remain 0.0–1.0 float. "
-            "BREAKING if changed to integer 0–100 or different scale."
-        )
-
-    # Low-cardinality strings → enum when full domain is known (<=10 values)
-    if (
-        dtype_str == "object"
-        and profile["cardinality_estimate"] <= 10
-        and profile.get("unique_values_full")
-        and len(profile["unique_values_full"]) == profile["cardinality_estimate"]
-    ):
-        clause["enum"] = profile["unique_values_full"]
-
-    if profile["name"].endswith("_id"):
-        clause["format"] = "uuid"
-        clause["pattern"] = r"^[0-9a-fA-F-]{36}$"
-
-    if profile["name"].endswith("_at"):
-        clause["format"] = "date-time"
-
-    return clause
+def dominant_string_pattern(sample_vals: list[str]) -> str | None:
+    if not sample_vals:
+        return None
+    first = str(sample_vals[0] or "")
+    joined = " ".join(str(v) for v in sample_vals[:20])
+    if re.match(r"^[0-9a-fA-F-]{36}$", first):
+        return "uuid-like"
+    if re.search(r"^\d{4}-\d{2}-\d{2}", joined):
+        return "iso8601-like"
+    return None
 
 
-def build_contract(column_profiles: dict[str, dict], contract_id: str) -> dict:
-    clauses = [column_to_clause(p) for p in column_profiles.values()]
-    return {
-        "id": contract_id,
-        "version": "1.0.0",
-        "domain": "fde-training",
-        "schema": clauses,
-    }
-
-
-def inject_lineage(contract: dict, lineage_path: Path) -> dict:
-    with open(lineage_path, encoding="utf-8") as f:
-        snapshot = json.loads(f.readlines()[-1])
-    consumers = [
-        e["target"]
-        for e in snapshot["edges"]
-        if "week3" in str(e.get("source", "")) or "extraction" in str(e.get("source", ""))
-    ]
-    contract["lineage"] = {
-        "upstream": [],
-        "downstream": [
-            {"id": c, "fields_consumed": ["doc_id", "extracted_facts"]} for c in consumers
-        ],
-    }
-    return contract
-
-
-def check_fact_confidence_violation(df: pd.DataFrame) -> None:
-    """Stage 1: if fact_confidence is object (mixed types), document contract violation."""
-    if "fact_confidence" not in df.columns:
+def profile_column_ydata(df: pd.DataFrame, out_html: Path | None) -> None:
+    if out_html is None:
         return
-    dt = df["fact_confidence"].dtype
-    if dt == object:
+    try:
+        from ydata_profiling import ProfileReport  # type: ignore
+    except ImportError:
+        print("Optional: pip install ydata-profiling for HTML structural profile.", file=sys.stderr)
+        return
+    report = ProfileReport(df, title="ContractGenerator Profile", minimal=True)
+    out_html.parent.mkdir(parents=True, exist_ok=True)
+    report.to_file(out_html)
+    print(f"Wrote ydata-profiling report {out_html}")
+
+
+def check_confidence_distribution(profile: dict, col_name: str) -> None:
+    if "confidence" not in col_name.lower() or "stats" not in profile:
+        return
+    m = profile["stats"]["mean"]
+    if m > 0.99 or m < 0.01:
         print(
-            "CONTRACT VIOLATION (data quality): column `fact_confidence` has dtype object, "
-            "not float64 — mixed or non-numeric types. Fix source data before relying on "
-            "confidence range enforcement.",
+            f"STATISTICAL FLAG: `{col_name}` mean={m:.4f} — possible clamp/broken distribution.",
             file=sys.stderr,
         )
 
 
+def column_to_field_spec(
+    profile: dict,
+    *,
+    df: pd.DataFrame,
+    col_name: str,
+) -> dict[str, Any]:
+    dtype_str = profile["dtype"]
+    spec: dict[str, Any] = {
+        "type": infer_type(dtype_str),
+        "required": profile["null_fraction"] == 0.0,
+        "description": (
+            f"Profiled `{col_name}`: pandas {dtype_str}, "
+            f"~{profile['null_fraction']:.2%} nulls, cardinality ~{profile['cardinality_estimate']}."
+        ),
+    }
+
+    if "confidence" in col_name.lower() and spec["type"] == "number":
+        spec["minimum"] = 0.0
+        spec["maximum"] = 1.0
+        spec["description"] = (
+            "Confidence score. MUST stay 0.0–1.0 float. "
+            "BREAKING if changed to integer 0–100 or different scale."
+        )
+
+    if (
+        dtype_str == "object"
+        and profile.get("unique_values_full")
+        and profile["cardinality_estimate"] <= 10
+        and len(profile["unique_values_full"]) == profile["cardinality_estimate"]
+    ):
+        spec["enum"] = profile["unique_values_full"]
+
+    if col_name.endswith("_id") and spec["type"] == "string":
+        spec["format"] = "uuid"
+        spec["pattern"] = r"^[0-9a-fA-F-]{36}$"
+
+    if col_name.endswith("_at") and spec["type"] == "string":
+        spec["format"] = "date-time"
+
+    if spec["type"] == "string" and col_name in ("source_hash",):
+        spec["pattern"] = r"^[a-f0-9]{64}$"
+        spec["description"] = "SHA-256 of source file (hex)."
+
+    # uniqueness heuristic for primary keys (skip unhashable / list cells)
+    s = df[col_name]
+    try:
+        nu = int(s.nunique())
+    except TypeError:
+        nu = int(_series_for_uniques(s).nunique())
+    if not s.isna().any() and nu == len(df) and col_name in (
+        "doc_id",
+        "event_id",
+        "fact_fact_id",
+    ):
+        spec["unique"] = True
+
+    pat = dominant_string_pattern(profile.get("sample_values") or [])
+    if pat and "format" not in spec:
+        spec["x_dominant_pattern"] = pat
+
+    return spec
+
+
+def build_schema_dict(column_profiles: dict[str, dict], df: pd.DataFrame) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for col, prof in column_profiles.items():
+        check_confidence_distribution(prof, col)
+        out[col] = column_to_field_spec(prof, df=df, col_name=col)
+    return out
+
+
+def soda_checks_for_table(table_key: str, id_col: str) -> dict[str, Any]:
+    return {
+        "type": "SodaChecks",
+        "specification": {
+            f"checks for {table_key}": [
+                f"missing_count({id_col}) = 0",
+                f"duplicate_count({id_col}) = 0",
+                "row_count >= 1",
+            ]
+        },
+    }
+
+
+def inject_lineage(
+    contract: dict[str, Any],
+    lineage_path: Path,
+    *,
+    fields_consumed: list[str],
+) -> dict[str, Any]:
+    try:
+        snapshot = load_lineage_snapshot(lineage_path)
+    except (OSError, json.JSONDecodeError) as e:
+        contract.setdefault("lineage", {"upstream": [], "downstream": []})
+        contract["lineage"]["_error"] = str(e)
+        return contract
+
+    edges = snapshot.get("edges") or []
+    consumers: list[str] = []
+    for e in edges:
+        src = str(e.get("source", ""))
+        if "week3" in src.lower() or "extraction" in src.lower():
+            consumers.append(str(e.get("target", "")))
+
+    downstream = [
+        {
+            "id": c,
+            "description": "Downstream node from Week 4 lineage snapshot",
+            "fields_consumed": fields_consumed,
+            "breaking_if_changed": [f for f in fields_consumed if "confidence" in f or f in ("doc_id", "event_id")],
+        }
+        for c in consumers
+        if c
+    ]
+    contract["lineage"] = {
+        "upstream": [],
+        "downstream": downstream,
+        "downstream_consumers": consumers,
+    }
+    return contract
+
+
+def build_bitol_contract(
+    *,
+    contract_id: str,
+    title: str,
+    owner: str,
+    source_path: Path,
+    schema_fields: dict[str, Any],
+    quality: dict[str, Any],
+    lineage: dict[str, Any],
+    extra_terms: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "kind": "DataContract",
+        "apiVersion": "v3.0.0",
+        "id": contract_id,
+        "info": {
+            "title": title,
+            "version": "1.0.0",
+            "owner": owner,
+            "description": (
+                "Auto-generated by ContractGenerator. "
+                "Flattened columns for JSONL profiling; nested logical arrays appear as JSON strings or fact_* columns."
+            ),
+        },
+        "servers": {
+            "local": {
+                "type": "local",
+                "path": str(source_path).replace("\\", "/"),
+                "format": "jsonl",
+            }
+        },
+        "terms": {
+            "usage": "Internal inter-system data contract. Do not publish without review.",
+            "limitations": extra_terms or "See schema field descriptions for breaking-change risks.",
+        },
+        "schema": schema_fields,
+        "quality": quality,
+        "lineage": lineage,
+        "generation": {
+            "pipeline": "structural+statistical profiling, lineage injection, optional ydata-profiling",
+            "llm_annotations": [],
+        },
+    }
+
+
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="ContractGenerator: profile JSONL and emit Bitol-style YAML (Stages 1–4)."
-    )
+    p = argparse.ArgumentParser(description="ContractGenerator: Bitol YAML + dbt fragment.")
+    p.add_argument("--preset", choices=["week3", "week5"], default=None, help="Use course default paths and stems")
+    p.add_argument("--source", type=Path, default=None)
+    p.add_argument("--contract-id", default=None)
+    p.add_argument("--file-stem", default=None, help="Output week3_extractions / week5_events (no .yaml)")
+    p.add_argument("--lineage", type=Path, default=Path("outputs/week4/lineage_snapshots.jsonl"))
+    p.add_argument("--output", type=Path, default=Path("generated_contracts"))
     p.add_argument(
-        "--source",
-        type=Path,
-        default=Path("outputs/week3/extractions.jsonl"),
-        help="Input JSONL to profile",
-    )
-    p.add_argument(
-        "--contract-id",
-        default="week3-document-refinery-extractions",
-        help="Contract id and output filename stem",
-    )
-    p.add_argument(
-        "--lineage",
-        type=Path,
-        default=Path("outputs/week4/lineage_snapshots.jsonl"),
-        help="Lineage snapshot JSONL (last line = one JSON object)",
-    )
-    p.add_argument(
-        "--output",
-        type=Path,
-        default=Path("generated_contracts"),
-        help="Output directory for generated YAML",
+        "--ydata-profile",
+        action="store_true",
+        help="Write ydata-profiling HTML under schema_snapshots/profiles/",
     )
     return p.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    records = load_jsonl(args.source)
-    df = flatten_for_profile(records)
+    if args.preset:
+        pr = PRESETS[args.preset]
+        source = Path(pr["source"])
+        contract_id = pr["contract_id"]
+        file_stem = pr["file_stem"]
+        title = pr["title"]
+        owner = pr["owner"]
+        dbt_model = pr["dbt_model"]
+        flatten_mode = pr["flatten"]
+    else:
+        if not args.source or not args.contract_id or not args.file_stem:
+            print("Provide --preset week3|week5 or all of --source --contract-id --file-stem", file=sys.stderr)
+            return 2
+        source = args.source
+        contract_id = args.contract_id
+        file_stem = args.file_stem
+        title = file_stem.replace("_", " ").title()
+        owner = "fde-training"
+        dbt_model = f"stg_{file_stem}"
+        flatten_mode = "events" if "week5" in file_stem or "event" in file_stem else "extraction"
 
-    # Stage 1
-    print(df.describe())
+    records = load_jsonl(source)
+    if flatten_mode == "events":
+        df = flatten_for_events(records)
+    else:
+        df = flatten_for_profile(records)
+
+    print(df.describe(include="all"))
     print(df.dtypes)
-    check_fact_confidence_violation(df)
 
-    # Stage 2
+    if "fact_confidence" in df.columns and df["fact_confidence"].dtype == object:
+        print(
+            "CONTRACT VIOLATION (data quality): fact_confidence is object dtype — mixed types.",
+            file=sys.stderr,
+        )
+
+    ydata_path = None
+    if args.ydata_profile:
+        ydata_path = Path("schema_snapshots/profiles") / f"{file_stem}_ydata.html"
+    profile_column_ydata(df, ydata_path)
+
     column_profiles = {col: profile_column(df[col], col) for col in df.columns}
+    schema_fields = build_schema_dict(column_profiles, df)
 
-    # Stages 3–4
-    contract = build_contract(column_profiles, args.contract_id)
-    contract = inject_lineage(contract, args.lineage)
+    id_col = "doc_id" if "doc_id" in df.columns else "event_id" if "event_id" in df.columns else list(df.columns)[0]
+    quality = soda_checks_for_table(file_stem, id_col)
+    qlist = quality["specification"][f"checks for {file_stem}"]
+    for c in df.columns:
+        if "confidence" in c.lower() and pd.api.types.is_numeric_dtype(df[c]):
+            qlist.append(f"min({c}) >= 0.0")
+            qlist.append(f"max({c}) <= 1.0")
+
+    fields_for_lineage = [c for c in ("doc_id", "extracted_facts", "extraction_model", "event_id", "aggregate_id") if c in df.columns]
+    contract: dict[str, Any] = build_bitol_contract(
+        contract_id=contract_id,
+        title=title,
+        owner=owner,
+        source_path=source,
+        schema_fields=schema_fields,
+        quality=quality,
+        lineage={"upstream": [], "downstream": []},
+    )
+    contract = inject_lineage(contract, args.lineage, fields_consumed=fields_for_lineage or list(schema_fields.keys())[:5])
 
     args.output.mkdir(parents=True, exist_ok=True)
-    output_path = args.output / f"{args.contract_id}.yaml"
-    with open(output_path, "w", encoding="utf-8") as f:
+    yaml_path = args.output / f"{file_stem}.yaml"
+    with open(yaml_path, "w", encoding="utf-8") as f:
         yaml.dump(contract, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
-    print(f"Wrote {output_path}")
+    print(f"Wrote {yaml_path}")
+
+    dbt_path = args.output / f"{file_stem}_dbt.yml"
+    emit_dbt_schema_yml(
+        model_name=dbt_model,
+        schema_fields=schema_fields,
+        description=f"dbt tests aligned with {file_stem}.yaml — regenerate, do not hand-edit.",
+        out_path=dbt_path,
+    )
+    print(f"Wrote {dbt_path}")
     return 0
 
 

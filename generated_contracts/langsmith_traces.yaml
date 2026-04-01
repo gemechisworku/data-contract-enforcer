@@ -1,0 +1,26 @@
+# Stub: regenerate when outputs/traces/runs.jsonl is per-run JSONL trace_record rows.
+kind: DataContract
+apiVersion: v3.0.0
+id: langsmith-trace-export
+info:
+  title: LangSmith — Trace Export
+  version: 0.0.1
+  owner: observability
+  description: Placeholder. Current export may be a single JSON object (run.jsonl), not JSONL trace rows.
+servers:
+  local:
+    type: local
+    path: outputs/traces/run.jsonl
+    format: jsonl
+terms:
+  usage: Internal only.
+  limitations: Normalize export shape before strict validation.
+schema: {}
+quality:
+  type: SodaChecks
+  specification:
+    checks for langsmith_traces:
+      - row_count >= 0
+lineage:
+  upstream: []
+  downstream: []

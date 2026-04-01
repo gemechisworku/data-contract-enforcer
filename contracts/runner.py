@@ -2,8 +2,8 @@
 """
 Usage:
   python contracts/runner.py --source outputs/migrate/week3/extractions.jsonl \\
-    --contract generated_contracts/week3-document-refinery-extractions.yaml \\
-    --report reports/validation_report.json
+    --contract generated_contracts/week3_extractions.yaml \\
+    --report validation_reports/validation_report.json
 """
 
 from __future__ import annotations
@@ -30,6 +30,35 @@ import generator as _contract_generator  # noqa: E402
 def load_contract(path: Path) -> dict[str, Any]:
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def normalize_schema_to_clauses(schema: Any) -> list[dict[str, Any]]:
+    """Bitol v3 uses schema as a dict of field -> spec; legacy uses a list of {name, ...}."""
+    if isinstance(schema, list):
+        return schema
+    if isinstance(schema, dict):
+        clauses: list[dict[str, Any]] = []
+        for name, spec in schema.items():
+            if not isinstance(spec, dict):
+                continue
+            clauses.append({"name": name, **spec})
+        return clauses
+    return []
+
+
+def _flatten_dataframe_for_contract(contract: dict[str, Any], rows: list[dict]) -> pd.DataFrame:
+    """Match ContractGenerator: exploded facts vs one row per event."""
+    if not rows:
+        return _contract_generator.flatten_for_profile(rows)
+    cid = (contract.get("id") or "").lower()
+    first = rows[0]
+    if "extracted_facts" in first:
+        return _contract_generator.flatten_for_profile(rows)
+    if "event_id" in first and isinstance(first.get("event_id"), str):
+        return _contract_generator.flatten_for_events(rows)
+    if "week5" in cid or "event-sourcing" in cid:
+        return _contract_generator.flatten_for_events(rows)
+    return _contract_generator.flatten_for_profile(rows)
 
 
 def load_jsonl_safe(path: Path) -> tuple[list[dict] | None, str | None]:
@@ -322,7 +351,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--report",
         type=Path,
-        default=Path("reports/validation_report.json"),
+        default=Path("validation_reports/validation_report.json"),
         help="Output JSON report path",
     )
     p.add_argument(
@@ -353,9 +382,9 @@ def main() -> int:
         _write_report(args.report, report)
         return 1
 
-    schema = contract.get("schema")
-    if not isinstance(schema, list):
-        report["errors"].append({"phase": "contract_schema", "error": "contract has no schema list"})
+    schema = normalize_schema_to_clauses(contract.get("schema"))
+    if not schema:
+        report["errors"].append({"phase": "contract_schema", "error": "contract has empty or missing schema"})
         report["overall"] = "ERROR"
         _write_report(args.report, report)
         return 1
@@ -368,7 +397,7 @@ def main() -> int:
         return 1
 
     try:
-        df = _contract_generator.flatten_for_profile(rows or [])
+        df = _flatten_dataframe_for_contract(contract, rows or [])
     except Exception as e:
         report["errors"].append({"phase": "flatten", "error": str(e), "traceback": traceback.format_exc()})
         report["overall"] = "ERROR"

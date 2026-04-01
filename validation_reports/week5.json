@@ -1,0 +1,8 @@
+{
+  "runner": "ValidationRunner",
+  "timestamp_utc": "2026-04-01T20:22:40.846840Z",
+  "structural": [],
+  "statistical": [],
+  "errors": [],
+  "overall": "PASS"
+}

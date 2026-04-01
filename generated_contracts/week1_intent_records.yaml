@@ -1,0 +1,26 @@
+# Stub: regenerate with ContractGenerator when outputs/week1/intent_records.jsonl is normalized (valid JSONL).
+kind: DataContract
+apiVersion: v3.0.0
+id: week1-intent-records
+info:
+  title: Week 1 Intent Correlator — Intent Records
+  version: 0.0.1
+  owner: week1-team
+  description: Placeholder contract. DOMAIN_NOTES documents shape drift and invalid JSONL lines.
+servers:
+  local:
+    type: local
+    path: outputs/week1/intent_records.jsonl
+    format: jsonl
+terms:
+  usage: Internal only.
+  limitations: Replace with profiled contract after data cleanup.
+schema: {}
+quality:
+  type: SodaChecks
+  specification:
+    checks for week1_intent_records:
+      - row_count >= 0
+lineage:
+  upstream: []
+  downstream: []
