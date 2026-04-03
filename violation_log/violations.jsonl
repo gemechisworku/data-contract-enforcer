@@ -1,0 +1,1 @@
+{"injection_note": true, "injected_at": "2026-04-03T20:45:20.143264Z", "type": "scale_change", "description": "extracted_facts[].confidence multiplied by 100 (0.87 → 87.0)", "source_file": "outputs\\migrate\\week3\\extractions.jsonl", "output_file": "outputs\\week3\\extractions_violated.jsonl"}

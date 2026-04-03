@@ -4,6 +4,9 @@ Usage:
   python contracts/runner.py --source outputs/migrate/week3/extractions.jsonl \\
     --contract generated_contracts/week3_extractions.yaml \\
     --report validation_reports/validation_report.json
+
+Aliases (rubric-compatible): --data for --source, --output for --report.
+ENFORCE (default): exit non-zero on FAIL/CRITICAL. AUDIT: always exit 0 after writing report.
 """
 
 from __future__ import annotations
@@ -346,12 +349,21 @@ def overall_severity(structural: list, statistical: list) -> str:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="ValidationRunner: structural then statistical checks.")
-    p.add_argument("--source", type=Path, required=True, help="JSONL data file")
+    p.add_argument(
+        "--source",
+        "--data",
+        type=Path,
+        required=True,
+        dest="source",
+        help="JSONL data file",
+    )
     p.add_argument("--contract", type=Path, required=True, help="YAML contract from ContractGenerator")
     p.add_argument(
         "--report",
+        "--output",
         type=Path,
         default=Path("validation_reports/validation_report.json"),
+        dest="report",
         help="Output JSON report path",
     )
     p.add_argument(
@@ -359,6 +371,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("schema_snapshots/baselines.json"),
         help="Baselines file for drift (created on first run if missing)",
+    )
+    p.add_argument(
+        "--mode",
+        choices=("ENFORCE", "AUDIT"),
+        default="ENFORCE",
+        help="ENFORCE: exit 1 on FAIL/CRITICAL. AUDIT: always exit 0 after writing report.",
     )
     return p.parse_args()
 
@@ -434,6 +452,8 @@ def main() -> int:
 
     _write_report(args.report, report)
     print(json.dumps({"overall": report["overall"], "report": str(args.report)}, indent=2))
+    if args.mode == "AUDIT":
+        return 0
     return 0 if report["overall"] in ("PASS", "WARN") else 1
 
 

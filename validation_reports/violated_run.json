@@ -1,0 +1,33 @@
+{
+  "runner": "ValidationRunner",
+  "timestamp_utc": "2026-04-03T20:45:27.106856Z",
+  "structural": [],
+  "statistical": [
+    {
+      "check": "range",
+      "field": "fact_confidence",
+      "severity": "CRITICAL",
+      "data_min": 0.0,
+      "data_max": 89.6,
+      "contract_minimum": 0.0,
+      "contract_maximum": 1.0,
+      "detail": "data_range_outside_contract_bounds"
+    },
+    {
+      "check": "statistical_drift",
+      "field": "processing_time_ms",
+      "status": "PASS",
+      "z_score": 0.0
+    },
+    {
+      "check": "statistical_drift",
+      "field": "fact_confidence",
+      "severity": "FAIL",
+      "status": "FAIL",
+      "z_score": 90.01,
+      "message": "fact_confidence mean drifted 90.0 stddev from baseline"
+    }
+  ],
+  "errors": [],
+  "overall": "FAIL"
+}
