@@ -1,6 +1,6 @@
 # Domain notes: outputs vs canonical schema
 
-This document compares artifacts under `outputs/` to `canonical_schema.md`, records every deviation with file evidence, and answers the five required domain questions using those same artifacts (and the specified Week 2 trace source).
+This document compares artifacts under `outputs/` to `canonical_schema.md`, records every deviation with file evidence, answers the five required domain questions using those same artifacts (and the specified Week 2 trace source), and summarizes **registered producer→consumer subscriptions** and breaking-field findings ([Part C](#part-c--contract-registry-subscriptions-minimum-interfaces); YAML in `contract_registry/subscriptions.yaml`).
 
 **References:** [Open Data Contract Standard — References (ODCS)](https://github.com/bitol-io/open-data-contract-standard/blob/main/docs/references.md) for relationship notation and contract structure patterns.
 
@@ -255,6 +255,43 @@ Systems most often fail when **validation is skipped or only runs in CI** on sam
 - **Validation at the boundary** (Refinery emit, Cartographer ingest, event store append) — the hypothetical `confidence` clause in §2 stops integer 0–100 before it reaches the graph.  
 - **Lineage snapshots** (`lineage_snapshot`) tie violations to **files/services** via the blame traversal in §3.  
 - **Evidence in-repo today:** `scripts/check_keys.py` and `outputs/extracted_keys.json` provide a **minimal** structural check (top-level keys); extending this to ODCS JSON Schema validation closes the gap between “keys exist” and “schema matches.”
+
+---
+
+## Part C — Contract registry subscriptions (minimum interfaces)
+
+The following boundaries are registered for **audit** with explicit `fields_consumed` and `breaking_fields`. The authoritative YAML (including `validation_mode`, `registered_at`, and `contact`) is [`contract_registry/subscriptions.yaml`](contract_registry/subscriptions.yaml).
+
+| Producer contract (`contract_id`) | Subscriber (`subscriber_id`) | Role |
+|----------------------------------|------------------------------|------|
+| `week3-document-refinery-extractions` | `week4-cartographer` | Week 3 extractions → Week 4 lineage / graph consumption |
+| `week4-lineage-snapshot` | `week6-contract-enforcer` | Lineage snapshot → Week 6 Data Contract Enforcer |
+| `week5-event-sourcing-events` | `week6-contract-enforcer` | Event stream → Week 6 Data Contract Enforcer |
+| `langsmith-trace-export` | `week6-contract-enforcer` | LangSmith trace export → Week 6 Data Contract Enforcer |
+
+**Week 3 → Week 4 (`week4-cartographer`)**
+
+- **Fields consumed (declared):** `doc_id`, `fact_fact_id`, `fact_text`, `fact_confidence`, `fact_entity_refs`, `source_hash`, `extraction_model`.
+- **Breaking fields (summary):** `doc_id` (join key / node linkage); `fact_confidence` (must remain 0.0–1.0 float scale for threshold logic).
+- **Finding (uncertainty):** Raw `outputs/week3/extractions.jsonl` uses document-level `confidence_score` and no nested `extracted_facts`; migrated JSONL under `outputs/migrate/week3/` uses flat `fact_*` columns. It is **not** verified here which shape Week 4 ingestion implements — mismatch between nested vs flat (or slug vs UUID `doc_id`) breaks consumers without an explicit mapping.
+
+**Week 4 → Week 6 (`week6-contract-enforcer`)**
+
+- **Fields consumed (declared, canonical lineage snapshot):** `snapshot_id`, `nodes`, `edges`, `git_commit`, `captured_at`.
+- **Breaking fields (summary):** Canonical `nodes[].node_id` vs actual graph `nodes[].id`; `edges[].source` / `edges[].target` as string endpoints (object or composite keys would break string joins).
+- **Finding (uncertainty):** `generated_contracts/week4_lineage.yaml` is a **stub** (`schema: {}`). Part A documents NetworkX-style graph output vs the canonical `lineage_snapshot` envelope — **any** switch between shapes is breaking once Week 6 validates one of them.
+
+**Week 5 → Week 6 (`week6-contract-enforcer`)**
+
+- **Fields consumed (declared):** `event_id`, `event_type`, `aggregate_id`, `aggregate_type`, `sequence_number`, `payload`, `metadata`, `schema_version`, `occurred_at`, `recorded_at`.
+- **Breaking fields (summary):** `event_id` (identity / dedup); `sequence_number` (monotonicity per aggregate); `payload` (migrated contract types it as string — serialization or type change breaks parsers).
+- **Finding (uncertainty):** Raw `outputs/week5/events.jsonl` uses `stream_id`, not `aggregate_id` (Part A). Which identifier Week 6 uses for cross-system joins is **not** verified — removing `stream_id` or only publishing `aggregate_id` without alias breaks whichever consumer was built against raw output.
+
+**LangSmith → Week 6 (`week6-contract-enforcer`)**
+
+- **Fields consumed (declared, canonical `trace_record`):** `id`, `run_type`, `start_time`, `end_time`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `total_cost`, `parent_run_id`, `session_id`.
+- **Breaking fields (summary):** `total_tokens` vs `prompt_tokens` + `completion_tokens`; `run_type` enum; `start_time` / `end_time` ordering and types.
+- **Finding (uncertainty):** `generated_contracts/langsmith_traces.yaml` is a **stub**; Part A documents a **single JSON object** in `outputs/traces/run.jsonl`, not JSONL `trace_record` rows. Week 6 cannot list production-verified breaking columns until the export shape is normalized — switching between “one blob” and per-run JSONL is a **consumption-model** breaking change.
 
 ---
 

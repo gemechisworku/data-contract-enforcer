@@ -1,0 +1,143 @@
+# contract_registry/subscriptions.yaml
+# Write one entry per arrow in your data flow diagram.
+# breaking_fields is the most important field — what would actually break
+# if the producer changed their schema?
+
+
+subscriptions:
+  # Week 3 → Week 4 (Document Refinery extractions → Brownfield Cartographer)
+  - contract_id: week3-document-refinery-extractions
+    subscriber_id: week4-cartographer
+    fields_consumed:
+      - doc_id
+      - fact_fact_id
+      - fact_text
+      - fact_confidence
+      - fact_entity_refs
+      - source_hash
+      - extraction_model
+    breaking_fields:
+      - field: doc_id
+        reason: >-
+          Stable join key if Cartographer maps documents to FILE/TABLE/EXTERNAL nodes;
+          type or format change (e.g. slug vs UUID) breaks linkage to lineage nodes.
+      - field: fact_confidence
+        reason: >-
+          Canonical scale is 0.0–1.0 float (see contract schema). Integer 0–100 or
+          renamed metric breaks any thresholding or min/max logic that assumes unit interval.
+      - field: extracted_facts (canonical) / flattened fact_* columns (migrated)
+        reason: >-
+          FINDING: Raw Week 3 outputs in DOMAIN_NOTES use document-level confidence_score
+          and omit nested extracted_facts; migrated JSONL uses flat fact_* columns.
+          Uncertainty which shape Week 4 ingestion actually implements — if the consumer
+          expects nested extracted_facts[] and the producer only ships flat columns (or vice
+          versa), parsing or field paths break without a defined mapping layer.
+    validation_mode: AUDIT
+    registered_at: '2025-01-13T09:00:00Z'
+    contact: game.worku@gmail.com
+
+  # Week 4 → Week 6 (lineage snapshot → Data Contract Enforcer / integration layer)
+  - contract_id: week4-lineage-snapshot
+    subscriber_id: week6-contract-enforcer
+    fields_consumed:
+      - snapshot_id
+      - nodes
+      - edges
+      - git_commit
+      - captured_at
+    breaking_fields:
+      - field: "(envelope vs graph shape)"
+        reason: >-
+          FINDING: generated_contracts/week4_lineage.yaml has schema: {} (stub). Actual
+          artifact in DOMAIN_NOTES is NetworkX-style (directed, multigraph, nodes, edges)
+          vs canonical lineage_snapshot envelope (snapshot_id, codebase_root, git_commit,
+          nodes[].node_id type::path, edges[].relationship). Uncertainty which fields Week 6
+          will validate first — any switch between envelopes is breaking for a consumer that
+          already coded to the other shape.
+      - field: nodes[].node_id (canonical) / nodes[].id (actual graph)
+        reason: >-
+          Blame-chain and attribution logic in canonical_schema.md assume edge endpoints
+          reference nodes[].node_id. Renaming or nesting IDs breaks graph traversal once
+          the enforcer indexes edges by node identity.
+      - field: edges[].source / edges[].target
+        reason: >-
+          String join keys today (DOMAIN_NOTES). Changing to objects or composite keys breaks
+          string-based adjacency unless dual-published.
+    validation_mode: AUDIT
+    registered_at: '2025-01-13T09:00:00Z'
+    contact: game.worku@gmail.com
+
+  # Week 5 → Week 6 (event store → Data Contract Enforcer)
+  - contract_id: week5-event-sourcing-events
+    subscriber_id: week6-contract-enforcer
+    fields_consumed:
+      - event_id
+      - event_type
+      - aggregate_id
+      - aggregate_type
+      - sequence_number
+      - payload
+      - metadata
+      - schema_version
+      - occurred_at
+      - recorded_at
+    breaking_fields:
+      - field: event_id
+        reason: >-
+          Deduplication and idempotent replays depend on stable unique ids; removal or
+          non-UUID format breaks consumer stores keyed by event_id.
+      - field: sequence_number
+        reason: >-
+          Monotonic per aggregate_id is a contract enforcement target (canonical_schema.md);
+          gaps, duplicates, or type change break ordering and saga-style consumers.
+      - field: payload
+        reason: >-
+          Migrated contract types payload as string (JSON serialized). If Week 6 validates
+          event-type-specific object schemas, changing to embedded object or different
+          serialization breaks parsers expecting a string column.
+      - field: stream_id / aggregate_id
+        reason: >-
+          FINDING: Raw outputs/week5/events.jsonl uses stream_id, not aggregate_id
+          (DOMAIN_NOTES). Migrated contract lists aggregate_id. Uncertainty which identifier
+          Week 6 joins on for cross-week attribution — renaming or splitting identifiers
+          without alias is breaking for whichever side the consumer implemented.
+    validation_mode: AUDIT
+    registered_at: '2025-01-13T09:00:00Z'
+    contact: game.worku@gmail.com
+
+  # LangSmith → Week 6 (trace export → Data Contract Enforcer / AI extension)
+  - contract_id: langsmith-trace-export
+    subscriber_id: week6-contract-enforcer
+    fields_consumed:
+      - id
+      - run_type
+      - start_time
+      - end_time
+      - prompt_tokens
+      - completion_tokens
+      - total_tokens
+      - total_cost
+      - parent_run_id
+      - session_id
+    breaking_fields:
+      - field: "(row-level trace_record vs single export blob)"
+        reason: >-
+          FINDING: langsmith_traces.yaml has schema: {} (stub). DOMAIN_NOTES states actual
+          outputs/traces/run.jsonl is one JSON object (inputs, outputs, metadata, langsmith),
+          not JSONL trace_record rows. Uncertainty which fields Week 6 can enforce — any move
+          to per-run JSONL changes the entire consumption model (streaming vs load-one-doc).
+      - field: total_tokens
+        reason: >-
+          Canonical invariant total_tokens = prompt_tokens + completion_tokens; changing
+          semantics or dropping any of the three breaks cost/latency checks once enforced.
+      - field: run_type
+        reason: >-
+          Enum llm|chain|tool|retriever|embedding drives which optional fields are required
+          (see canonical_schema AI extension); new values or free text break switch-based validation.
+      - field: start_time / end_time
+        reason: >-
+          Ordering constraint end_time > start_time; type change away from ISO date-time or
+          removal breaks temporal validation and trace ordering.
+    validation_mode: AUDIT
+    registered_at: '2025-01-13T09:00:00Z'
+    contact: game.worku@gmail.com
