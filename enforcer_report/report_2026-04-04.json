@@ -1,0 +1,132 @@
+{
+  "generated_at": "2026-04-04T19:49:40.302827Z",
+  "period": "2026-03-28 to 2026-04-04 (schema context: last 7 days)",
+  "data_health": {
+    "score": 40.0,
+    "narrative": "Data health score is 40/100: 1 CRITICAL check(s) detected across 5 checks; each CRITICAL deducts 20 points from the base pass-rate score. Address these before downstream consumers rely on the affected fields.",
+    "total_checks": 5,
+    "checks_passed": 3,
+    "critical_count": 1,
+    "formula": "(checks_passed / total_checks) * 100 - 20 * critical_violations, clamped 0-100"
+  },
+  "violations_by_severity": {
+    "CRITICAL": 1,
+    "FAIL": 1,
+    "WARN": 0,
+    "OTHER": 0
+  },
+  "top_violations_plain": [
+    "[Week 3 Document Refinery] (week3-document-refinery-extractions) in report `violated_run.json`: field **`fact_confidence`** \u2014 Range validation failed: observed data span [0.0, 89.6] but the contract requires [0.0, 1.0]. Registry subscribers at risk: week4-cartographer. Fix the producer or migrate data before consumers trust this column.",
+    "[Week 3 Document Refinery] (week3-document-refinery-extractions) in report `violated_run.json`: field **`fact_confidence`** \u2014 Statistical drift: mean moved about 90.01 standard deviations from the saved baseline (fact_confidence mean drifted 90.0 stddev from baseline). Registry subscribers at risk: week4-cartographer. Fix the producer or migrate data before consumers trust this column."
+  ],
+  "schema_changes": [
+    {
+      "field": "doc_id",
+      "verdict": "COMPATIBLE",
+      "summary": "No material schema change detected for doc_id.",
+      "action_required": "No mandatory downstream code change; notify subscribers if they parse this field."
+    },
+    {
+      "field": "extracted_at",
+      "verdict": "COMPATIBLE",
+      "summary": "No material schema change detected for extracted_at.",
+      "action_required": "No mandatory downstream code change; notify subscribers if they parse this field."
+    },
+    {
+      "field": "extraction_model",
+      "verdict": "COMPATIBLE",
+      "summary": "No material schema change detected for extraction_model.",
+      "action_required": "No mandatory downstream code change; notify subscribers if they parse this field."
+    },
+    {
+      "field": "fact_confidence",
+      "verdict": "COMPATIBLE",
+      "summary": "No material schema change detected for fact_confidence.",
+      "action_required": "No mandatory downstream code change; notify subscribers if they parse this field."
+    },
+    {
+      "field": "fact_entity_refs",
+      "verdict": "COMPATIBLE",
+      "summary": "No material schema change detected for fact_entity_refs.",
+      "action_required": "No mandatory downstream code change; notify subscribers if they parse this field."
+    },
+    {
+      "field": "fact_fact_id",
+      "verdict": "COMPATIBLE",
+      "summary": "No material schema change detected for fact_fact_id.",
+      "action_required": "No mandatory downstream code change; notify subscribers if they parse this field."
+    },
+    {
+      "field": "fact_page_ref",
+      "verdict": "COMPATIBLE",
+      "summary": "No material schema change detected for fact_page_ref.",
+      "action_required": "No mandatory downstream code change; notify subscribers if they parse this field."
+    },
+    {
+      "field": "fact_source_excerpt",
+      "verdict": "COMPATIBLE",
+      "summary": "No material schema change detected for fact_source_excerpt.",
+      "action_required": "No mandatory downstream code change; notify subscribers if they parse this field."
+    },
+    {
+      "field": "fact_text",
+      "verdict": "COMPATIBLE",
+      "summary": "No material schema change detected for fact_text.",
+      "action_required": "No mandatory downstream code change; notify subscribers if they parse this field."
+    },
+    {
+      "field": "processing_time_ms",
+      "verdict": "COMPATIBLE",
+      "summary": "No material schema change detected for processing_time_ms.",
+      "action_required": "No mandatory downstream code change; notify subscribers if they parse this field."
+    },
+    {
+      "field": "source_hash",
+      "verdict": "COMPATIBLE",
+      "summary": "No material schema change detected for source_hash.",
+      "action_required": "No mandatory downstream code change; notify subscribers if they parse this field."
+    },
+    {
+      "field": "source_path",
+      "verdict": "COMPATIBLE",
+      "summary": "No material schema change detected for source_path.",
+      "action_required": "No mandatory downstream code change; notify subscribers if they parse this field."
+    }
+  ],
+  "ai_risk": {
+    "reliable_data_for_ai": false,
+    "embedding_drift_within_bounds": false,
+    "embedding_baseline_pending": true,
+    "prompt_quarantine_clean": true,
+    "output_violation_stable": true,
+    "narrative": "Embedding drift: status=BASELINE_SET, score=0.0. Prompt inputs: 48 valid / 0 quarantined. LLM output schema violation rate: None (status UNKNOWN). Embedding baseline was just established\u2014run embedding drift again on a second schedule for a comparable score. Overall: prompt and output checks are clean; complete a second embedding run to confirm drift stability.",
+    "raw": {
+      "embedding_drift": {
+        "status": "BASELINE_SET",
+        "drift_score": 0.0,
+        "message": "Baseline established. Run again to detect drift.",
+        "provider": "openrouter",
+        "model": "openai/text-embedding-3-small"
+      },
+      "prompt_validation": {
+        "valid": 48,
+        "quarantined": 0
+      },
+      "output_violation_rate": {}
+    }
+  },
+  "recommended_actions": [
+    "Update `outputs/migrate/week3/extractions.jsonl` generation (or upstream extractor) so `fact_confidence` remains a float in 0.0\u20131.0 per `generated_contracts/week3_extractions.yaml` and contract `week3-document-refinery-extractions` (scale-change to 0\u2013100 breaks `week4-cartographer` thresholds in the registry).",
+    "Gate deploys with `uv run python contracts/runner.py --contract generated_contracts/week3_extractions.yaml --data outputs/migrate/week3/extractions.jsonl --mode ENFORCE` so CRITICAL range checks fail the job before bad rows propagate.",
+    "After contract or data fixes, re-run `uv run python contracts/generator.py --preset week3` and `uv run python contracts/schema_analyzer.py --contract-id week3-document-refinery-extractions --since \"7 days ago\" --output validation_reports/schema_evolution_week3.json`, then commit new `schema_snapshots/week3-document-refinery-extractions/*.yaml` files."
+  ],
+  "sources": {
+    "runner_reports": [
+      "validation_reports\\violated_run.json",
+      "validation_reports\\week3.json",
+      "validation_reports\\week5.json"
+    ],
+    "schema_evolution": "validation_reports\\schema_evolution_week3.json",
+    "ai_bundle": "validation_reports\\ai_extensions.json"
+  }
+}

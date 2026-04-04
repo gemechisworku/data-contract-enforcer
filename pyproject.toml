@@ -9,3 +9,5 @@ dependencies = [
 
 [project.optional-dependencies]
 profiling = ["ydata-profiling>=4.0"]
+ai = ["numpy>=1.24", "openai>=1.0", "jsonschema>=4.0", "python-dotenv>=1.0"]
+report = ["fpdf2>=2.7.0"]

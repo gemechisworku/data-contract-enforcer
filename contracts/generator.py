@@ -8,7 +8,7 @@ Usage:
   python contracts/generator.py --source outputs/week3/extractions.jsonl --file-stem week3_extractions \\
       --contract-id week3-document-refinery-extractions --lineage outputs/week4/lineage_snapshots.jsonl
 
-Optional: pip install ydata-profiling  (Step 1 extended: HTML profile to schema_snapshots/)
+Optional: uv sync --extra profiling  (Step 1 extended: HTML profile to schema_snapshots/)
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -167,7 +168,7 @@ def profile_column_ydata(df: pd.DataFrame, out_html: Path | None) -> None:
     try:
         from ydata_profiling import ProfileReport  # type: ignore
     except ImportError:
-        print("Optional: pip install ydata-profiling for HTML structural profile.", file=sys.stderr)
+        print("Optional: uv sync --extra profiling for HTML structural profile.", file=sys.stderr)
         return
     report = ProfileReport(df, title="ContractGenerator Profile", minimal=True)
     out_html.parent.mkdir(parents=True, exist_ok=True)
@@ -247,6 +248,34 @@ def column_to_field_spec(
         spec["x_dominant_pattern"] = pat
 
     return spec
+
+
+def write_schema_snapshot(
+    contract_id: str,
+    schema_fields: dict[str, Any],
+    source_path: Path,
+    *,
+    root: Path | None = None,
+) -> Path:
+    """
+    Timestamped inferred schema for SchemaEvolutionAnalyzer (diff consecutive runs).
+    Path: schema_snapshots/{contract_id}/{timestamp}.yaml
+    """
+    root = root or Path("schema_snapshots")
+    ts_name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    snap_dir = root / contract_id
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    out_path = snap_dir / f"{ts_name}.yaml"
+    payload = {
+        "contract_id": contract_id,
+        "snapshot_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "source_data": str(source_path).replace("\\", "/"),
+        "schema": schema_fields,
+    }
+    with open(out_path, "w", encoding="utf-8") as f:
+        yaml.dump(payload, f, default_flow_style=False, sort_keys=True, allow_unicode=True)
+    print(f"Wrote schema snapshot {out_path}")
+    return out_path
 
 
 def build_schema_dict(column_profiles: dict[str, dict], df: pd.DataFrame) -> dict[str, Any]:
@@ -440,6 +469,8 @@ def main() -> int:
     with open(yaml_path, "w", encoding="utf-8") as f:
         yaml.dump(contract, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
     print(f"Wrote {yaml_path}")
+
+    write_schema_snapshot(contract_id, schema_fields, source)
 
     dbt_path = args.output / f"{file_stem}_dbt.yml"
     emit_dbt_schema_yml(

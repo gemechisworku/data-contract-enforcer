@@ -1,0 +1,15 @@
+{
+  "embedding_drift": {
+    "status": "PASS",
+    "drift_score": 0.0,
+    "threshold": 0.15,
+    "interpretation": "stable",
+    "provider": "openrouter",
+    "model": "openai/text-embedding-3-small"
+  },
+  "prompt_validation": {
+    "valid": 48,
+    "quarantined": 0
+  },
+  "output_violation_rate": null
+}

@@ -1,0 +1,4 @@
+# Minimal dependencies for pip users. Prefer uv: see README.md (uv sync).
+# For AI / report tooling: uv sync --extra ai --extra report
+pandas>=2.0
+pyyaml>=6.0

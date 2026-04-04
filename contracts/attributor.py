@@ -262,7 +262,14 @@ def _pick_failures(report: dict[str, Any]) -> list[dict[str, Any]]:
 
 def main() -> int:
     p = argparse.ArgumentParser(description="ViolationAttributor: registry-first blast radius + lineage + blame.")
-    p.add_argument("--report", type=Path, default=Path("validation_reports/violated_run.json"), help="ValidationRunner JSON")
+    p.add_argument(
+        "--report",
+        "--violation",
+        type=Path,
+        default=Path("validation_reports/violated_run.json"),
+        dest="report",
+        help="ValidationRunner JSON (alias: --violation)",
+    )
     p.add_argument("--contract-id", type=str, default="week3-document-refinery-extractions", help="Producer contract id")
     p.add_argument("--registry", type=Path, default=Path("contract_registry/subscriptions.yaml"))
     p.add_argument("--lineage", type=Path, default=Path("outputs/migrate/week4/lineage_snapshots.jsonl"))
@@ -272,7 +279,14 @@ def main() -> int:
         default="FILE::src/analyzers/dag_config_parser.py",
         help="Lineage node id that appears as edge.source for forward walk",
     )
-    p.add_argument("--violations-out", type=Path, default=Path("violation_log/attributed_violations.jsonl"))
+    p.add_argument(
+        "--violations-out",
+        "--output",
+        type=Path,
+        default=Path("violation_log/attributed_violations.jsonl"),
+        dest="violations_out",
+        help="Append attributed violations JSONL (alias: --output)",
+    )
     p.add_argument("--repo-root", type=Path, default=None, help="Git repo root for blame (optional)")
     p.add_argument("--blame-file", type=str, default=None, help="Path relative to repo for git log --follow")
     args = p.parse_args()

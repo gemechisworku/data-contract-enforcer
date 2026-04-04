@@ -1,0 +1,238 @@
+{
+  "ok": true,
+  "contract_id": "week3-document-refinery-extractions",
+  "compatibility_mode": "BACKWARD",
+  "compared": {
+    "older": "schema_snapshots\\week3-document-refinery-extractions\\20260404T184318Z.yaml",
+    "newer": "schema_snapshots\\week3-document-refinery-extractions\\20260404T184328Z.yaml",
+    "older_at": "2026-04-04T18:43:18.320598+00:00",
+    "newer_at": "2026-04-04T18:43:28.238521+00:00"
+  },
+  "changes": [
+    {
+      "field": "doc_id",
+      "verdict": "COMPATIBLE",
+      "reason": "No material schema change detected for doc_id.",
+      "old_clause": {
+        "description": "Profiled `doc_id`: pandas object, ~0.00% nulls, cardinality ~33.",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F-]{36}$",
+        "required": true,
+        "type": "string"
+      },
+      "new_clause": {
+        "description": "Profiled `doc_id`: pandas object, ~0.00% nulls, cardinality ~33.",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F-]{36}$",
+        "required": true,
+        "type": "string"
+      }
+    },
+    {
+      "field": "extracted_at",
+      "verdict": "COMPATIBLE",
+      "reason": "No material schema change detected for extracted_at.",
+      "old_clause": {
+        "description": "Profiled `extracted_at`: pandas object, ~0.00% nulls, cardinality ~26.",
+        "format": "date-time",
+        "required": true,
+        "type": "string"
+      },
+      "new_clause": {
+        "description": "Profiled `extracted_at`: pandas object, ~0.00% nulls, cardinality ~26.",
+        "format": "date-time",
+        "required": true,
+        "type": "string"
+      }
+    },
+    {
+      "field": "extraction_model",
+      "verdict": "COMPATIBLE",
+      "reason": "No material schema change detected for extraction_model.",
+      "old_clause": {
+        "description": "Profiled `extraction_model`: pandas object, ~0.00% nulls, cardinality ~1.",
+        "enum": [
+          "unknown"
+        ],
+        "required": true,
+        "type": "string"
+      },
+      "new_clause": {
+        "description": "Profiled `extraction_model`: pandas object, ~0.00% nulls, cardinality ~1.",
+        "enum": [
+          "unknown"
+        ],
+        "required": true,
+        "type": "string"
+      }
+    },
+    {
+      "field": "fact_confidence",
+      "verdict": "COMPATIBLE",
+      "reason": "No material schema change detected for fact_confidence.",
+      "old_clause": {
+        "description": "Confidence score. MUST stay 0.0\u20131.0 float. BREAKING if changed to integer 0\u2013100 or different scale.",
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "required": true,
+        "type": "number"
+      },
+      "new_clause": {
+        "description": "Confidence score. MUST stay 0.0\u20131.0 float. BREAKING if changed to integer 0\u2013100 or different scale.",
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "required": true,
+        "type": "number"
+      }
+    },
+    {
+      "field": "fact_entity_refs",
+      "verdict": "COMPATIBLE",
+      "reason": "No material schema change detected for fact_entity_refs.",
+      "old_clause": {
+        "description": "Profiled `fact_entity_refs`: pandas object, ~0.00% nulls, cardinality ~1.",
+        "enum": [
+          "[]"
+        ],
+        "required": true,
+        "type": "string"
+      },
+      "new_clause": {
+        "description": "Profiled `fact_entity_refs`: pandas object, ~0.00% nulls, cardinality ~1.",
+        "enum": [
+          "[]"
+        ],
+        "required": true,
+        "type": "string"
+      }
+    },
+    {
+      "field": "fact_fact_id",
+      "verdict": "COMPATIBLE",
+      "reason": "No material schema change detected for fact_fact_id.",
+      "old_clause": {
+        "description": "Profiled `fact_fact_id`: pandas object, ~0.00% nulls, cardinality ~33.",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F-]{36}$",
+        "required": true,
+        "type": "string"
+      },
+      "new_clause": {
+        "description": "Profiled `fact_fact_id`: pandas object, ~0.00% nulls, cardinality ~33.",
+        "format": "uuid",
+        "pattern": "^[0-9a-fA-F-]{36}$",
+        "required": true,
+        "type": "string"
+      }
+    },
+    {
+      "field": "fact_page_ref",
+      "verdict": "COMPATIBLE",
+      "reason": "No material schema change detected for fact_page_ref.",
+      "old_clause": {
+        "description": "Profiled `fact_page_ref`: pandas object, ~100.00% nulls, cardinality ~0.",
+        "required": false,
+        "type": "string"
+      },
+      "new_clause": {
+        "description": "Profiled `fact_page_ref`: pandas object, ~100.00% nulls, cardinality ~0.",
+        "required": false,
+        "type": "string"
+      }
+    },
+    {
+      "field": "fact_source_excerpt",
+      "verdict": "COMPATIBLE",
+      "reason": "No material schema change detected for fact_source_excerpt.",
+      "old_clause": {
+        "description": "Profiled `fact_source_excerpt`: pandas object, ~0.00% nulls, cardinality ~1.",
+        "enum": [
+          ""
+        ],
+        "required": true,
+        "type": "string"
+      },
+      "new_clause": {
+        "description": "Profiled `fact_source_excerpt`: pandas object, ~0.00% nulls, cardinality ~1.",
+        "enum": [
+          ""
+        ],
+        "required": true,
+        "type": "string"
+      }
+    },
+    {
+      "field": "fact_text",
+      "verdict": "COMPATIBLE",
+      "reason": "No material schema change detected for fact_text.",
+      "old_clause": {
+        "description": "Profiled `fact_text`: pandas object, ~0.00% nulls, cardinality ~33.",
+        "required": true,
+        "type": "string"
+      },
+      "new_clause": {
+        "description": "Profiled `fact_text`: pandas object, ~0.00% nulls, cardinality ~33.",
+        "required": true,
+        "type": "string"
+      }
+    },
+    {
+      "field": "processing_time_ms",
+      "verdict": "COMPATIBLE",
+      "reason": "No material schema change detected for processing_time_ms.",
+      "old_clause": {
+        "description": "Profiled `processing_time_ms`: pandas int64, ~0.00% nulls, cardinality ~24.",
+        "required": true,
+        "type": "integer"
+      },
+      "new_clause": {
+        "description": "Profiled `processing_time_ms`: pandas int64, ~0.00% nulls, cardinality ~24.",
+        "required": true,
+        "type": "integer"
+      }
+    },
+    {
+      "field": "source_hash",
+      "verdict": "COMPATIBLE",
+      "reason": "No material schema change detected for source_hash.",
+      "old_clause": {
+        "description": "SHA-256 of source file (hex).",
+        "pattern": "^[a-f0-9]{64}$",
+        "required": true,
+        "type": "string"
+      },
+      "new_clause": {
+        "description": "SHA-256 of source file (hex).",
+        "pattern": "^[a-f0-9]{64}$",
+        "required": true,
+        "type": "string"
+      }
+    },
+    {
+      "field": "source_path",
+      "verdict": "COMPATIBLE",
+      "reason": "No material schema change detected for source_path.",
+      "old_clause": {
+        "description": "Profiled `source_path`: pandas object, ~0.00% nulls, cardinality ~1.",
+        "enum": [
+          "unknown"
+        ],
+        "required": true,
+        "type": "string"
+      },
+      "new_clause": {
+        "description": "Profiled `source_path`: pandas object, ~0.00% nulls, cardinality ~1.",
+        "enum": [
+          "unknown"
+        ],
+        "required": true,
+        "type": "string"
+      }
+    }
+  ],
+  "summary": {
+    "total": 12,
+    "breaking": 0,
+    "compatible": 12
+  }
+}
