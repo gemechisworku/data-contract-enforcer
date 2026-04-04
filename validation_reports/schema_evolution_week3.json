@@ -3,10 +3,10 @@
   "contract_id": "week3-document-refinery-extractions",
   "compatibility_mode": "BACKWARD",
   "compared": {
-    "older": "schema_snapshots\\week3-document-refinery-extractions\\20260404T184318Z.yaml",
-    "newer": "schema_snapshots\\week3-document-refinery-extractions\\20260404T184328Z.yaml",
-    "older_at": "2026-04-04T18:43:18.320598+00:00",
-    "newer_at": "2026-04-04T18:43:28.238521+00:00"
+    "older": "schema_snapshots\\week3-document-refinery-extractions\\20260404T192559Z.yaml",
+    "newer": "schema_snapshots\\week3-document-refinery-extractions\\20260404T200840Z.yaml",
+    "older_at": "2026-04-04T19:25:59.237715+00:00",
+    "newer_at": "2026-04-04T20:08:40.883801+00:00"
   },
   "changes": [
     {

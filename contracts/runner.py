@@ -6,16 +6,18 @@ Usage:
     --report validation_reports/validation_report.json
 
 Aliases (rubric-compatible): --data for --source, --output for --report.
-ENFORCE (default): exit non-zero on FAIL/CRITICAL. AUDIT: always exit 0 after writing report.
+AUDIT: exit 0 (log only). WARN: exit 1 on CRITICAL or ERROR. ENFORCE (default): exit 1 on CRITICAL, HIGH, or ERROR.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
 import traceback
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -28,6 +30,7 @@ if str(_CONTRACTS_DIR) not in sys.path:
     sys.path.insert(0, str(_CONTRACTS_DIR))
 
 import generator as _contract_generator  # noqa: E402
+from baseline_store import write_baselines  # noqa: E402
 
 
 def load_contract(path: Path) -> dict[str, Any]:
@@ -129,6 +132,7 @@ def run_structural(schema: list[dict], df: pd.DataFrame) -> list[dict]:
                     "field": name,
                     "severity": "CRITICAL",
                     "detail": f"column '{name}' not in dataframe",
+                    "status": "ERROR",
                 }
             )
             continue
@@ -313,38 +317,131 @@ def run_statistical_drift_section(df: pd.DataFrame, baselines_path: Path) -> lis
     return findings
 
 
-def write_baselines(df: pd.DataFrame, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    baselines: dict[str, dict[str, float]] = {}
-    for col in df.select_dtypes(include="number").columns:
-        s = pd.to_numeric(df[col], errors="coerce").dropna()
-        if s.empty:
-            continue
-        std = float(s.std()) if len(s) > 1 else 0.0
-        if std != std:  # NaN
-            std = 0.0
-        baselines[col] = {"mean": float(s.mean()), "stddev": std}
-    payload = {
-        "written_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "columns": baselines,
-    }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+def _check_id(chk: str, field: str) -> str:
+    return f"{chk}:{field}" if field else str(chk)
 
 
-def overall_severity(structural: list, statistical: list) -> str:
-    def sev(x: dict) -> str:
-        return x.get("severity", "")
+def normalize_structural_finding(f: dict[str, Any]) -> dict[str, Any]:
+    out = dict(f)
+    chk = str(f.get("check", ""))
+    field = str(f.get("field", ""))
+    out["check_id"] = _check_id(chk, field)
 
-    if any(sev(x) == "CRITICAL" for x in structural):
+    if chk == "column_present":
+        out["status"] = "ERROR"
+        out["severity"] = "CRITICAL"
+        out["actual_value"] = None
+        out["expected"] = "column present in flattened JSONL/DataFrame"
+        out["message"] = str(f.get("detail", ""))
+        return out
+
+    if chk == "schema_clause":
+        out["status"] = "ERROR"
+        out["severity"] = "CRITICAL"
+        out["actual_value"] = f.get("clause")
+        out["expected"] = "schema clause with name"
+        out["message"] = str(f.get("detail", ""))
+        return out
+
+    out["status"] = "FAIL"
+    sev = str(f.get("severity", "CRITICAL"))
+    out["severity"] = sev if sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "WARNING") else "CRITICAL"
+    detail_keys = (
+        "null_fraction",
+        "null_count",
+        "pandas_dtype",
+        "non_conforming_count",
+        "sample_non_conforming",
+        "mismatch_count",
+        "sample_mismatches",
+        "unparseable_count",
+        "pattern",
+    )
+    out["actual_value"] = {k: f[k] for k in detail_keys if k in f}
+    out["expected"] = "contract clause satisfied"
+    out["message"] = str(f.get("detail", chk))
+    return out
+
+
+def normalize_statistical_finding(f: dict[str, Any]) -> dict[str, Any]:
+    out = dict(f)
+    chk = str(f.get("check", ""))
+    field = str(f.get("field", ""))
+    out["check_id"] = _check_id(chk, field)
+
+    if chk == "range":
+        out["status"] = "FAIL"
+        out["severity"] = "CRITICAL"
+        out["actual_value"] = {"min": f.get("data_min"), "max": f.get("data_max")}
+        out["expected"] = {"min": f.get("contract_minimum"), "max": f.get("contract_maximum")}
+        out["message"] = (
+            "Numeric min/max outside contract bounds (independent check; still runs if drift passes). "
+            + str(f.get("detail", ""))
+        )
+        return out
+
+    if chk == "statistical_drift":
+        st = str(f.get("status", "")).upper()
+        if st == "PASS":
+            out["status"] = "PASS"
+            out["severity"] = "LOW"
+            out["actual_value"] = {"z_score": f.get("z_score")}
+            out["expected"] = "mean within baseline band (warn >2 stddev, fail >3 stddev)"
+            out["message"] = str(f.get("message", ""))
+        elif st == "WARN" or str(f.get("severity", "")).upper() == "WARN":
+            out["status"] = "WARN"
+            out["severity"] = "WARNING"
+            out["actual_value"] = {"z_score": f.get("z_score")}
+            out["expected"] = "mean within 3 stddev of stored baseline"
+            out["message"] = str(f.get("message", ""))
+        else:
+            out["status"] = "FAIL"
+            out["severity"] = "HIGH"
+            out["actual_value"] = {"z_score": f.get("z_score")}
+            out["expected"] = "mean within 3 stddev of stored baseline"
+            out["message"] = str(f.get("message", ""))
+        return out
+
+    out.setdefault("status", "FAIL")
+    out.setdefault("severity", "MEDIUM")
+    out.setdefault("message", str(f.get("detail", "")))
+    return out
+
+
+def overall_from_normalized_results(results: list[dict[str, Any]]) -> str:
+    if any(r.get("status") == "ERROR" for r in results):
+        return "ERROR"
+    if any(r.get("status") == "FAIL" and r.get("severity") == "CRITICAL" for r in results):
         return "CRITICAL"
-    if any(sev(x) == "FAIL" for x in statistical):
+    if any(r.get("status") == "FAIL" and r.get("severity") == "HIGH" for r in results):
         return "FAIL"
-    if any(sev(x) == "WARN" for x in statistical):
+    if any(r.get("status") == "WARN" for r in results):
         return "WARN"
-    if any(sev(x) == "CRITICAL" for x in statistical):
-        return "CRITICAL"
     return "PASS"
+
+
+def exit_code_for_mode(mode: str, results: list[dict[str, Any]]) -> int:
+    if mode == "AUDIT":
+        return 0
+    for r in results:
+        sev = str(r.get("severity", "")).upper()
+        st = str(r.get("status", "")).upper()
+        if mode == "WARN":
+            if sev == "CRITICAL" or st == "ERROR":
+                return 1
+        elif mode == "ENFORCE":
+            if sev in ("CRITICAL", "HIGH") or st == "ERROR":
+                return 1
+    return 0
+
+
+def default_snapshot_id(source: Path) -> str:
+    try:
+        st = source.stat()
+        raw = f"{source.resolve()}|{st.st_mtime_ns}|{st.st_size}"
+    except OSError:
+        raw = str(source)
+    return "snap_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def parse_args() -> argparse.Namespace:
@@ -374,17 +471,23 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--mode",
-        choices=("ENFORCE", "AUDIT"),
+        choices=("ENFORCE", "AUDIT", "WARN"),
         default="ENFORCE",
-        help="ENFORCE: exit 1 on FAIL/CRITICAL. AUDIT: always exit 0 after writing report.",
+        help="AUDIT: always exit 0. WARN: exit 1 on CRITICAL/ERROR. ENFORCE: exit 1 on CRITICAL, HIGH, or ERROR.",
+    )
+    p.add_argument(
+        "--snapshot-id",
+        default=None,
+        help="Stable id for this validation run (default: hash of --source file metadata)",
     )
     return p.parse_args()
 
 
 def main() -> int:
+    run_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     report: dict[str, Any] = {
         "runner": "ValidationRunner",
-        "timestamp_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "timestamp_utc": run_ts,
         "structural": [],
         "statistical": [],
         "errors": [],
@@ -397,13 +500,17 @@ def main() -> int:
     except Exception as e:
         report["errors"].append({"phase": "load_contract", "error": str(e), "traceback": traceback.format_exc()})
         report["overall"] = "ERROR"
+        _finalize_rubric_report(report, contract_id="unknown", snapshot_id="unknown", results=[], run_ts=run_ts)
         _write_report(args.report, report)
         return 1
+
+    contract_id = str(contract.get("id") or contract.get("info", {}).get("title") or "unknown")
 
     schema = normalize_schema_to_clauses(contract.get("schema"))
     if not schema:
         report["errors"].append({"phase": "contract_schema", "error": "contract has empty or missing schema"})
         report["overall"] = "ERROR"
+        _finalize_rubric_report(report, contract_id=contract_id, snapshot_id="unknown", results=[], run_ts=run_ts)
         _write_report(args.report, report)
         return 1
 
@@ -411,6 +518,7 @@ def main() -> int:
     if err:
         report["errors"].append({"phase": "load_data", "error": err})
         report["overall"] = "ERROR"
+        _finalize_rubric_report(report, contract_id=contract_id, snapshot_id="unknown", results=[], run_ts=run_ts)
         _write_report(args.report, report)
         return 1
 
@@ -419,28 +527,37 @@ def main() -> int:
     except Exception as e:
         report["errors"].append({"phase": "flatten", "error": str(e), "traceback": traceback.format_exc()})
         report["overall"] = "ERROR"
+        _finalize_rubric_report(report, contract_id=contract_id, snapshot_id="unknown", results=[], run_ts=run_ts)
         _write_report(args.report, report)
         return 1
 
+    snapshot_id = args.snapshot_id or default_snapshot_id(args.source)
+
     # Structural (first)
     try:
-        report["structural"] = run_structural(schema, df)
+        raw_structural = run_structural(schema, df)
     except Exception as e:
         report["errors"].append({"phase": "structural", "error": str(e), "traceback": traceback.format_exc()})
-        report["structural"] = [{"severity": "CRITICAL", "check": "structural_runner", "detail": str(e)}]
+        raw_structural = [{"severity": "CRITICAL", "check": "structural_runner", "detail": str(e), "field": ""}]
 
-    # Statistical: range, then drift
+    report["structural"] = [normalize_structural_finding(f) for f in raw_structural]
+
+    # Statistical: range (confidence bounds), then drift — independent code paths
+    stat_list: list[dict[str, Any]] = []
     try:
-        report["statistical"] = run_statistical_range(schema, df)
+        stat_list.extend(run_statistical_range(schema, df))
     except Exception as e:
         report["errors"].append({"phase": "statistical_range", "error": str(e), "traceback": traceback.format_exc()})
 
     try:
-        report["statistical"].extend(run_statistical_drift_section(df, args.baselines))
+        stat_list.extend(run_statistical_drift_section(df, args.baselines))
     except Exception as e:
         report["errors"].append({"phase": "statistical_drift", "error": str(e), "traceback": traceback.format_exc()})
 
-    report["overall"] = overall_severity(report["structural"], report["statistical"])
+    report["statistical"] = [normalize_statistical_finding(f) for f in stat_list]
+
+    results: list[dict[str, Any]] = list(report["structural"]) + list(report["statistical"])
+    report["overall"] = overall_from_normalized_results(results)
 
     # Write baselines after run if file missing (first successful pipeline through data)
     if not args.baselines.is_file() and len(df) > 0:
@@ -450,11 +567,42 @@ def main() -> int:
         except Exception as e:
             report["errors"].append({"phase": "write_baselines", "error": str(e)})
 
+    _finalize_rubric_report(report, contract_id=contract_id, snapshot_id=snapshot_id, results=results, run_ts=run_ts)
+
     _write_report(args.report, report)
-    print(json.dumps({"overall": report["overall"], "report": str(args.report)}, indent=2))
-    if args.mode == "AUDIT":
-        return 0
-    return 0 if report["overall"] in ("PASS", "WARN") else 1
+    print(json.dumps({"overall": report["overall"], "report": str(args.report), "report_id": report.get("report_id")}, indent=2))
+    return exit_code_for_mode(args.mode, results)
+
+
+def _finalize_rubric_report(
+    report: dict[str, Any],
+    *,
+    contract_id: str,
+    snapshot_id: str,
+    results: list[dict[str, Any]],
+    run_ts: str,
+) -> None:
+    """Attach rubric top-level fields; keep legacy keys."""
+    total = len(results)
+    passed = sum(1 for r in results if str(r.get("status", "")).upper() == "PASS")
+    failed = sum(1 for r in results if str(r.get("status", "")).upper() == "FAIL")
+    warned = sum(
+        1
+        for r in results
+        if str(r.get("status", "")).upper() == "WARN" or str(r.get("severity", "")).upper() == "WARNING"
+    )
+    errored = sum(1 for r in results if str(r.get("status", "")).upper() == "ERROR")
+
+    report["report_id"] = str(uuid.uuid4())
+    report["contract_id"] = contract_id
+    report["snapshot_id"] = snapshot_id
+    report["run_timestamp"] = run_ts
+    report["total_checks"] = total
+    report["passed"] = passed
+    report["failed"] = failed
+    report["warned"] = warned
+    report["errored"] = errored
+    report["results"] = results
 
 
 def _write_report(path: Path, report: dict) -> None:

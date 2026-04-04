@@ -141,6 +141,28 @@ def classify_change(field: str, old_clause: dict[str, Any] | None, new_clause: d
     ot = old_clause.get("type")
     nt = new_clause.get("type")
     if ot != nt:
+        # Rubric: explicit CRITICAL breaking — float 0.0–1.0 confidence scale → int 0–100
+        if ot == "number" and nt == "integer":
+            o_lo, o_hi = old_clause.get("minimum"), old_clause.get("maximum")
+            n_lo, n_hi = new_clause.get("minimum"), new_clause.get("maximum")
+            try:
+                if (
+                    o_lo is not None
+                    and o_hi is not None
+                    and n_lo is not None
+                    and n_hi is not None
+                    and float(o_lo) == 0.0
+                    and float(o_hi) == 1.0
+                    and int(float(n_lo)) == 0
+                    and int(float(n_hi)) == 100
+                ):
+                    return (
+                        "BREAKING",
+                        f"CRITICAL: narrow type/scale for {field}: unit-interval float [0.0,1.0] -> integer [0,100] "
+                        f"(breaks confidence thresholds, range checks, and statistical baselines).",
+                    )
+            except (TypeError, ValueError):
+                pass
         if _is_type_widen(ot, nt):
             return ("COMPATIBLE", f"Type widened {ot} -> {nt} for {field} (no precision loss for integers).")
         return ("BREAKING", f"Type changed {ot} -> {nt} for {field} (narrowing or incompatible).")

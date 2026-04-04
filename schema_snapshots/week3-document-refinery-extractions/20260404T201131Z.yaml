@@ -1,0 +1,77 @@
+contract_id: week3-document-refinery-extractions
+schema:
+  doc_id:
+    description: 'Profiled `doc_id`: pandas object, ~0.00% nulls, cardinality ~33.'
+    format: uuid
+    pattern: ^[0-9a-fA-F-]{36}$
+    required: true
+    type: string
+  extracted_at:
+    description: 'Profiled `extracted_at`: pandas object, ~0.00% nulls, cardinality
+      ~26.'
+    format: date-time
+    required: true
+    type: string
+  extraction_model:
+    description: 'Profiled `extraction_model`: pandas object, ~0.00% nulls, cardinality
+      ~1.'
+    enum:
+    - unknown
+    required: true
+    type: string
+  fact_confidence:
+    description: Confidence score. MUST stay 0.0–1.0 float. BREAKING if changed to
+      integer 0–100 or different scale.
+    maximum: 1.0
+    minimum: 0.0
+    required: true
+    type: number
+  fact_entity_refs:
+    description: 'Profiled `fact_entity_refs`: pandas object, ~0.00% nulls, cardinality
+      ~1.'
+    enum:
+    - '[]'
+    required: true
+    type: string
+  fact_fact_id:
+    description: 'Profiled `fact_fact_id`: pandas object, ~0.00% nulls, cardinality
+      ~33.'
+    format: uuid
+    pattern: ^[0-9a-fA-F-]{36}$
+    required: true
+    type: string
+  fact_page_ref:
+    description: 'Profiled `fact_page_ref`: pandas object, ~100.00% nulls, cardinality
+      ~0.'
+    required: false
+    type: string
+  fact_source_excerpt:
+    description: 'Profiled `fact_source_excerpt`: pandas object, ~0.00% nulls, cardinality
+      ~1.'
+    enum:
+    - ''
+    required: true
+    type: string
+  fact_text:
+    description: 'Profiled `fact_text`: pandas object, ~0.00% nulls, cardinality ~33.'
+    required: true
+    type: string
+  processing_time_ms:
+    description: 'Profiled `processing_time_ms`: pandas int64, ~0.00% nulls, cardinality
+      ~24.'
+    required: true
+    type: integer
+  source_hash:
+    description: SHA-256 of source file (hex).
+    pattern: ^[a-f0-9]{64}$
+    required: true
+    type: string
+  source_path:
+    description: 'Profiled `source_path`: pandas object, ~0.00% nulls, cardinality
+      ~1.'
+    enum:
+    - unknown
+    required: true
+    type: string
+snapshot_at: '2026-04-04T20:11:31.329351Z'
+source_data: outputs/migrate/week3/extractions.jsonl

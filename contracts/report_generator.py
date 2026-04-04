@@ -3,12 +3,18 @@
 Aggregates ValidationRunner JSON, schema evolution, AI extension outputs, and registry data
 into a stakeholder-facing report under enforcer_report/.
 
-Usage:
-  uv run python contracts/report_generator.py \\
-    --validation-dir validation_reports \\
-    --registry contract_registry/subscriptions.yaml \\
-    --contract-id week3-document-refinery-extractions \\
-    --schema-evolution validation_reports/schema_evolution_week3.json
+Usage (one line — works in PowerShell, cmd, and bash):
+
+  uv run python contracts/report_generator.py --validation-dir validation_reports --registry contract_registry/subscriptions.yaml --contract-id week3-document-refinery-extractions --contract-yaml generated_contracts/week3_extractions.yaml --data-jsonl outputs/migrate/week3/extractions.jsonl --baselines schema_snapshots/baselines.json --schema-evolution validation_reports/schema_evolution_week3.json
+
+PowerShell only: line continuation is the backtick `, not \\. Example:
+
+  uv run python contracts/report_generator.py `
+    --contract-id week3-document-refinery-extractions `
+    --contract-yaml generated_contracts/week3_extractions.yaml `
+    --data-jsonl outputs/migrate/week3/extractions.jsonl
+
+Bash: use \\ at end of line for continuation.
 """
 from __future__ import annotations
 
@@ -26,6 +32,59 @@ from attributor import registry_blast_radius
 
 _SEVERITY_RANK = {"CRITICAL": 0, "FAIL": 1, "HIGH": 1, "WARN": 2, "MEDIUM": 3, "LOW": 4}
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# Defaults when --contract-yaml / --data-jsonl are omitted (repo-relative to project root)
+_DEFAULT_CONTRACT_YAML_BY_CONTRACT_ID: dict[str, Path] = {
+    "week3-document-refinery-extractions": Path("generated_contracts/week3_extractions.yaml"),
+    "week5-event-sourcing-events": Path("generated_contracts/week5_events.yaml"),
+    "week4-lineage-snapshot": Path("generated_contracts/week4_lineage.yaml"),
+    "langsmith-trace-export": Path("generated_contracts/langsmith_traces.yaml"),
+}
+_DEFAULT_DATA_JSONL_BY_CONTRACT_ID: dict[str, Path] = {
+    "week3-document-refinery-extractions": Path("outputs/migrate/week3/extractions.jsonl"),
+    "week5-event-sourcing-events": Path("outputs/migrate/week5/events.jsonl"),
+    "week4-lineage-snapshot": Path("outputs/migrate/week4/lineage_snapshots.jsonl"),
+    "langsmith-trace-export": Path("outputs/migrate/traces/runs.jsonl"),
+}
+
+
+def _display_path(path: Path) -> str:
+    """Stable repo-relative path string for report text."""
+    try:
+        rp = path.resolve()
+        return rp.relative_to(_REPO_ROOT.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def resolve_report_artifacts(
+    contract_id: str,
+    *,
+    contract_yaml: Path | None,
+    data_jsonl: Path | None,
+    baselines: Path | None,
+    schema_evolution: Path | None,
+) -> dict[str, Path | None]:
+    """Resolve concrete paths so recommendations need no placeholders."""
+
+    def _abs(p: Path) -> Path:
+        return p.resolve() if p.is_absolute() else (_REPO_ROOT / p).resolve()
+
+    cy = contract_yaml or _DEFAULT_CONTRACT_YAML_BY_CONTRACT_ID.get(
+        contract_id, Path("generated_contracts") / f"{contract_id}.yaml"
+    )
+    dj = data_jsonl or _DEFAULT_DATA_JSONL_BY_CONTRACT_ID.get(
+        contract_id, Path("outputs/migrate/week3/extractions.jsonl")
+    )
+    base = baselines or Path("schema_snapshots/baselines.json")
+    return {
+        "contract_yaml": _abs(cy),
+        "data_jsonl": _abs(dj),
+        "baselines": _abs(base),
+        "schema_evolution": _abs(schema_evolution) if schema_evolution else None,
+    }
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -41,7 +100,7 @@ def load_runner_reports(validation_dir: Path) -> list[tuple[Path, dict[str, Any]
             doc = json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
-        if doc.get("runner") == "ValidationRunner":
+        if doc.get("runner") == "ValidationRunner" or doc.get("report_id"):
             out.append((p, doc))
     return out
 
@@ -53,6 +112,12 @@ def flatten_findings(
     rows: list[dict[str, Any]] = []
     for path, rep in reports:
         src = path.name
+        if rep.get("results"):
+            for row in rep["results"]:
+                chk = str(row.get("check", ""))
+                section = "statistical" if chk in ("range", "statistical_drift") else "structural"
+                rows.append({**row, "_source_report": src, "_section": section})
+            continue
         for row in rep.get("structural", []) or []:
             rows.append({**row, "_source_report": src, "_section": "structural"})
         for row in rep.get("statistical", []) or []:
@@ -64,6 +129,10 @@ def is_check_passed(row: dict[str, Any]) -> bool:
     """A single check passes if it is not a failing structural or statistical finding."""
     sev = (row.get("severity") or "").upper()
     st = (row.get("status") or "").upper()
+    if st == "PASS":
+        return True
+    if st in ("FAIL", "ERROR"):
+        return False
     if row.get("_section") == "structural":
         return sev != "CRITICAL"
     if row.get("check") == "statistical_drift" and st == "PASS":
@@ -117,12 +186,14 @@ def health_narrative(score: float, critical_ct: int, total: int) -> str:
 
 
 def violations_by_severity(findings: list[dict[str, Any]]) -> dict[str, int]:
-    counts: dict[str, int] = {"CRITICAL": 0, "FAIL": 0, "WARN": 0, "OTHER": 0}
+    counts: dict[str, int] = {"CRITICAL": 0, "FAIL": 0, "WARN": 0, "ERROR": 0, "OTHER": 0}
     for f in findings:
         if not is_check_passed(f):
             sev = (f.get("severity") or "").upper()
             st = (f.get("status") or "").upper()
-            if sev == "CRITICAL":
+            if st == "ERROR":
+                counts["ERROR"] += 1
+            elif sev == "CRITICAL":
                 counts["CRITICAL"] += 1
             elif sev == "FAIL" or st == "FAIL":
                 counts["FAIL"] += 1
@@ -315,10 +386,23 @@ def build_recommendations(
     top: list[dict[str, Any]],
     contract_id: str,
     critical_ct: int,
+    *,
+    validation_dir: Path,
+    artifacts: dict[str, Path | None],
 ) -> list[str]:
-    """Three specific, prioritized actions."""
+    """Data-driven actions using resolved contract, data, and baseline paths (no placeholders)."""
     recs: list[str] = []
     seen: set[str] = set()
+
+    cy = artifacts.get("contract_yaml")
+    dj = artifacts.get("data_jsonl")
+    bl = artifacts.get("baselines")
+    sev_path = artifacts.get("schema_evolution")
+
+    cy_s = _display_path(cy) if cy else "generated_contracts/<contract>.yaml"
+    dj_s = _display_path(dj) if dj else "outputs/<data>.jsonl"
+    bl_s = _display_path(bl) if bl else "schema_snapshots/baselines.json"
+    sev_s = _display_path(sev_path) if sev_path else f"validation_reports/schema_evolution_{contract_id.split('-')[0]}.json"
 
     def add(text: str) -> None:
         if text not in seen and len(recs) < 5:
@@ -326,33 +410,36 @@ def build_recommendations(
             recs.append(text)
 
     for row in top:
-        fld = str(row.get("field", ""))
-        chk = str(row.get("check", ""))
-        if fld == "fact_confidence" and chk == "range":
-            add(
-                "Update `outputs/migrate/week3/extractions.jsonl` generation (or upstream extractor) so "
-                "`fact_confidence` remains a float in 0.0–1.0 per "
-                f"`generated_contracts/week3_extractions.yaml` and contract `{contract_id}` "
-                "(scale-change to 0–100 breaks `week4-cartographer` thresholds in the registry)."
-            )
-            break
+        fld = str(row.get("field", "") or "unknown_field")
+        chk = str(row.get("check", "") or "unknown_check")
+        chk_id = str(row.get("check_id", "") or f"{chk}:{fld}")
+        src = str(row.get("_source_report", "") or "validation_report.json")
+        sev = str(row.get("severity", "") or "")
+        st = str(row.get("status", "") or "").strip()
+        if not st and sev:
+            st = sev
+        report_fp = _display_path((validation_dir / src).resolve()) if src else _display_path(validation_dir / "validation_report.json")
+        add(
+            f"Fix `{chk_id}` on field `{fld}` (status={st}, severity={sev}): edit schema key `{fld}` in `{cy_s}` "
+            f"to match the intended contract; align source data in `{dj_s}`; evidence in `{report_fp}` "
+            f"(`actual_value` vs `expected`)."
+        )
     if critical_ct > 0:
         add(
-            "Gate deploys with `uv run python contracts/runner.py --contract "
-            "generated_contracts/week3_extractions.yaml --data outputs/migrate/week3/extractions.jsonl "
-            "--mode ENFORCE` so CRITICAL range checks fail the job before bad rows propagate."
+            f"Gate CI: `uv run python contracts/runner.py --contract {cy_s} --data {dj_s} "
+            f"--report validation_reports/validation_report.json --mode ENFORCE` "
+            f"(blocks CRITICAL/HIGH/ERROR for `{contract_id}`)."
         )
     add(
-        "After contract or data fixes, re-run `uv run python contracts/generator.py --preset week3` and "
-        "`uv run python contracts/schema_analyzer.py --contract-id week3-document-refinery-extractions "
-        "--since \"7 days ago\" --output validation_reports/schema_evolution_week3.json`, then commit new "
-        "`schema_snapshots/week3-document-refinery-extractions/*.yaml` files."
+        f"Refresh statistical baselines for drift: run the runner on known-good data so `{bl_s}` updates means/stddev "
+        f"for numeric columns, or delete baselines to re-establish on next pass."
     )
     add(
-        "Regenerate statistical baselines: run the runner once on known-good JSONL so "
-        "`schema_snapshots/baselines.json` reflects post-fix distributions for drift detection."
+        f"After schema or data fixes: `uv run python contracts/generator.py` for this producer, then "
+        f"`uv run python contracts/schema_analyzer.py --contract-id {contract_id} --since \"7 days ago\" "
+        f"--output {sev_s}` and commit new files under `schema_snapshots/{contract_id}/`."
     )
-    return recs[:3]
+    return recs[:5]
 
 
 def write_markdown(path: Path, payload: dict[str, Any]) -> None:
@@ -368,7 +455,10 @@ def write_markdown(path: Path, payload: dict[str, Any]) -> None:
 
     lines.append("\n## Violations this week\n")
     vb = payload["violations_by_severity"]
-    lines.append(f"- CRITICAL: {vb.get('CRITICAL', 0)}\n- FAIL: {vb.get('FAIL', 0)}\n- WARN: {vb.get('WARN', 0)}\n")
+    lines.append(
+        f"- CRITICAL: {vb.get('CRITICAL', 0)}\n- FAIL: {vb.get('FAIL', 0)}\n"
+        f"- WARN: {vb.get('WARN', 0)}\n- ERROR: {vb.get('ERROR', 0)}\n"
+    )
     lines.append("\n### Most significant (plain language)\n")
     for i, para in enumerate(payload.get("top_violations_plain", []), 1):
         lines.append(f"{i}. {para}\n")
@@ -477,8 +567,18 @@ def generate_report(
     ai_bundle_path: Path | None,
     out_dir: Path,
     date_str: str | None = None,
+    contract_yaml: Path | None = None,
+    data_jsonl: Path | None = None,
+    baselines_path: Path | None = None,
 ) -> dict[str, Any]:
     date_str = date_str or _utc_now().strftime("%Y-%m-%d")
+    artifacts = resolve_report_artifacts(
+        contract_id,
+        contract_yaml=contract_yaml,
+        data_jsonl=data_jsonl,
+        baselines=baselines_path,
+        schema_evolution=schema_evolution_path,
+    )
     reports = load_runner_reports(validation_dir)
     findings = flatten_findings(reports)
     score, total, passed, crit_ct = compute_data_health_score(findings)
@@ -501,7 +601,13 @@ def generate_report(
     ai = load_ai_bundle(ai_bundle_path)
     ai_risk = ai_risk_assessment(ai)
 
-    recs = build_recommendations(top, contract_id, crit_ct)
+    recs = build_recommendations(
+        top,
+        contract_id,
+        crit_ct,
+        validation_dir=validation_dir,
+        artifacts=artifacts,
+    )
 
     now = _utc_now().isoformat().replace("+00:00", "Z")
     period_end = _utc_now().date()
@@ -524,9 +630,13 @@ def generate_report(
         "ai_risk": ai_risk,
         "recommended_actions": recs,
         "sources": {
-            "runner_reports": [str(p) for p, _ in reports],
-            "schema_evolution": str(schema_evolution_path) if schema_evolution_path else None,
-            "ai_bundle": str(ai_bundle_path) if ai_bundle_path else None,
+            "runner_reports": [_display_path(p) for p, _ in reports],
+            "schema_evolution": _display_path(schema_evolution_path) if schema_evolution_path else None,
+            "ai_bundle": _display_path(ai_bundle_path) if ai_bundle_path else None,
+            "contract_yaml": _display_path(artifacts["contract_yaml"]) if artifacts.get("contract_yaml") else None,
+            "data_jsonl": _display_path(artifacts["data_jsonl"]) if artifacts.get("data_jsonl") else None,
+            "baselines": _display_path(artifacts["baselines"]) if artifacts.get("baselines") else None,
+            "contract_id": contract_id,
         },
     }
 
@@ -558,6 +668,24 @@ def main() -> int:
     p.add_argument("--ai-bundle", type=Path, default=Path("validation_reports/ai_extensions.json"))
     p.add_argument("--out-dir", type=Path, default=Path("enforcer_report"))
     p.add_argument("--date", default=None, help="YYYY-MM-DD suffix for filenames (default: today UTC)")
+    p.add_argument(
+        "--contract-yaml",
+        type=Path,
+        default=None,
+        help="Bitol YAML used by ValidationRunner (default: by --contract-id)",
+    )
+    p.add_argument(
+        "--data-jsonl",
+        type=Path,
+        default=None,
+        help="JSONL validated by the runner (default: by --contract-id)",
+    )
+    p.add_argument(
+        "--baselines",
+        type=Path,
+        default=None,
+        help="schema_snapshots/baselines.json path for drift (default: schema_snapshots/baselines.json)",
+    )
     args = p.parse_args()
 
     payload = generate_report(
@@ -569,6 +697,9 @@ def main() -> int:
         ai_bundle_path=args.ai_bundle if args.ai_bundle.is_file() else None,
         out_dir=args.out_dir,
         date_str=args.date,
+        contract_yaml=args.contract_yaml,
+        data_jsonl=args.data_jsonl,
+        baselines_path=args.baselines,
     )
     print(json.dumps({"ok": True, "data_health_score": payload["data_health"]["score"], "outputs": payload.get("_output_files")}, indent=2))
     return 0

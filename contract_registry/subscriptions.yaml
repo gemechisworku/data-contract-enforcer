@@ -2,6 +2,9 @@
 # Write one entry per arrow in your data flow diagram.
 # breaking_fields is the most important field — what would actually break
 # if the producer changed their schema?
+#
+# runner_checks: optional documentation aligned with ValidationRunner result check_id patterns
+# (e.g. range:fact_confidence, statistical_drift:fact_confidence, column_present:doc_id).
 
 
 subscriptions:
@@ -32,13 +35,51 @@ subscriptions:
           Uncertainty which shape Week 4 ingestion actually implements — if the consumer
           expects nested extracted_facts[] and the producer only ships flat columns (or vice
           versa), parsing or field paths break without a defined mapping layer.
+    runner_checks:
+      - column_present:doc_id
+      - uuid_pattern:doc_id
+      - range:fact_confidence
+      - statistical_drift:fact_confidence
+      - statistical_drift:processing_time_ms
     validation_mode: AUDIT
     registered_at: '2025-01-13T09:00:00Z'
     contact: game.worku@gmail.com
 
-  # Week 4 → Week 6 (lineage snapshot → Data Contract Enforcer / integration layer)
+  # Week 3 → Week 7 (same producer contract — enforcer validates JSONL vs generated YAML)
+  - contract_id: week3-document-refinery-extractions
+    subscriber_id: week7-contract-enforcer
+    fields_consumed:
+      - doc_id
+      - fact_fact_id
+      - fact_text
+      - fact_confidence
+      - fact_entity_refs
+      - source_hash
+      - extraction_model
+    breaking_fields:
+      - field: fact_confidence
+        reason: >-
+          ValidationRunner enforces schema min/max (0.0–1.0) and statistical_drift vs
+          schema_snapshots/baselines.json; changing scale or type breaks range + drift checks.
+      - field: doc_id
+        reason: >-
+          column_present, required, and uuid format checks; breaks joins and attribution if missing or malformed.
+      - field: processing_time_ms
+        reason: >-
+          statistical_drift when baselines exist; large distribution shifts fail WARN/FAIL thresholds.
+    runner_checks:
+      - range:fact_confidence
+      - statistical_drift:fact_confidence
+      - statistical_drift:processing_time_ms
+      - column_present:doc_id
+      - uuid_pattern:doc_id
+    validation_mode: AUDIT
+    registered_at: '2025-01-13T09:00:00Z'
+    contact: game.worku@gmail.com
+
+  # Week 4 → Week 7 (lineage snapshot → Data Contract Enforcer / integration layer)
   - contract_id: week4-lineage-snapshot
-    subscriber_id: week6-contract-enforcer
+    subscriber_id: week7-contract-enforcer
     fields_consumed:
       - snapshot_id
       - nodes
@@ -51,7 +92,7 @@ subscriptions:
           FINDING: generated_contracts/week4_lineage.yaml has schema: {} (stub). Actual
           artifact in DOMAIN_NOTES is NetworkX-style (directed, multigraph, nodes, edges)
           vs canonical lineage_snapshot envelope (snapshot_id, codebase_root, git_commit,
-          nodes[].node_id type::path, edges[].relationship). Uncertainty which fields Week 6
+          nodes[].node_id type::path, edges[].relationship). Uncertainty which fields Week 7
           will validate first — any switch between envelopes is breaking for a consumer that
           already coded to the other shape.
       - field: nodes[].node_id (canonical) / nodes[].id (actual graph)
@@ -63,13 +104,17 @@ subscriptions:
         reason: >-
           String join keys today (DOMAIN_NOTES). Changing to objects or composite keys breaks
           string-based adjacency unless dual-published.
+    runner_checks:
+      - column_present:nodes
+      - column_present:edges
+      - column_present:snapshot_id
     validation_mode: AUDIT
     registered_at: '2025-01-13T09:00:00Z'
     contact: game.worku@gmail.com
 
-  # Week 5 → Week 6 (event store → Data Contract Enforcer)
+  # Week 5 → Week 7 (event store → Data Contract Enforcer)
   - contract_id: week5-event-sourcing-events
-    subscriber_id: week6-contract-enforcer
+    subscriber_id: week7-contract-enforcer
     fields_consumed:
       - event_id
       - event_type
@@ -92,22 +137,26 @@ subscriptions:
           gaps, duplicates, or type change break ordering and saga-style consumers.
       - field: payload
         reason: >-
-          Migrated contract types payload as string (JSON serialized). If Week 6 validates
+          Migrated contract types payload as string (JSON serialized). If Week 7 validates
           event-type-specific object schemas, changing to embedded object or different
           serialization breaks parsers expecting a string column.
       - field: stream_id / aggregate_id
         reason: >-
           FINDING: Raw outputs/week5/events.jsonl uses stream_id, not aggregate_id
           (DOMAIN_NOTES). Migrated contract lists aggregate_id. Uncertainty which identifier
-          Week 6 joins on for cross-week attribution — renaming or splitting identifiers
+          Week 7 joins on for cross-week attribution — renaming or splitting identifiers
           without alias is breaking for whichever side the consumer implemented.
+    runner_checks:
+      - column_present:event_id
+      - column_present:sequence_number
+      - enum_conformance:event_type
     validation_mode: AUDIT
     registered_at: '2025-01-13T09:00:00Z'
     contact: game.worku@gmail.com
 
-  # LangSmith → Week 6 (trace export → Data Contract Enforcer / AI extension)
+  # LangSmith → Week 7 (trace export → Data Contract Enforcer / AI extension)
   - contract_id: langsmith-trace-export
-    subscriber_id: week6-contract-enforcer
+    subscriber_id: week7-contract-enforcer
     fields_consumed:
       - id
       - run_type
@@ -124,7 +173,7 @@ subscriptions:
         reason: >-
           FINDING: langsmith_traces.yaml has schema: {} (stub). DOMAIN_NOTES states actual
           outputs/traces/run.jsonl is one JSON object (inputs, outputs, metadata, langsmith),
-          not JSONL trace_record rows. Uncertainty which fields Week 6 can enforce — any move
+          not JSONL trace_record rows. Uncertainty which fields Week 7 can enforce — any move
           to per-run JSONL changes the entire consumption model (streaming vs load-one-doc).
       - field: total_tokens
         reason: >-
@@ -138,6 +187,10 @@ subscriptions:
         reason: >-
           Ordering constraint end_time > start_time; type change away from ISO date-time or
           removal breaks temporal validation and trace ordering.
+    runner_checks:
+      - column_present:total_tokens
+      - column_present:run_type
+      - date_time_format:start_time
     validation_mode: AUDIT
     registered_at: '2025-01-13T09:00:00Z'
     contact: game.worku@gmail.com

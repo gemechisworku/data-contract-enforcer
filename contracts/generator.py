@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -24,6 +25,7 @@ from typing import Any
 import pandas as pd
 import yaml
 
+from baseline_store import write_baselines
 from dbt_emit import emit_dbt_schema_yml
 
 # --- Presets (evaluation layout: generated_contracts/week3_extractions.yaml, week5_events.yaml) ---
@@ -176,15 +178,19 @@ def profile_column_ydata(df: pd.DataFrame, out_html: Path | None) -> None:
     print(f"Wrote ydata-profiling report {out_html}")
 
 
-def check_confidence_distribution(profile: dict, col_name: str) -> None:
+def check_confidence_distribution(profile: dict, col_name: str) -> str | None:
+    """Return a clause-level warning when the mean looks clamped or degenerate."""
     if "confidence" not in col_name.lower() or "stats" not in profile:
-        return
+        return None
     m = profile["stats"]["mean"]
     if m > 0.99 or m < 0.01:
-        print(
-            f"STATISTICAL FLAG: `{col_name}` mean={m:.4f} — possible clamp/broken distribution.",
-            file=sys.stderr,
+        msg = (
+            f"Suspicious distribution: mean={m:.4f} (possible clamp to 0/1 or broken sampling). "
+            "Re-profile after fixing upstream extraction."
         )
+        print(f"STATISTICAL FLAG: `{col_name}` {msg}", file=sys.stderr)
+        return msg
+    return None
 
 
 def column_to_field_spec(
@@ -192,6 +198,7 @@ def column_to_field_spec(
     *,
     df: pd.DataFrame,
     col_name: str,
+    statistical_warning: str | None = None,
 ) -> dict[str, Any]:
     dtype_str = profile["dtype"]
     spec: dict[str, Any] = {
@@ -210,6 +217,8 @@ def column_to_field_spec(
             "Confidence score. MUST stay 0.0–1.0 float. "
             "BREAKING if changed to integer 0–100 or different scale."
         )
+        if statistical_warning:
+            spec["x_statistical_warning"] = statistical_warning
 
     if (
         dtype_str == "object"
@@ -281,9 +290,97 @@ def write_schema_snapshot(
 def build_schema_dict(column_profiles: dict[str, dict], df: pd.DataFrame) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for col, prof in column_profiles.items():
-        check_confidence_distribution(prof, col)
-        out[col] = column_to_field_spec(prof, df=df, col_name=col)
+        warn = check_confidence_distribution(prof, col)
+        out[col] = column_to_field_spec(prof, df=df, col_name=col, statistical_warning=warn)
     return out
+
+
+def _load_dotenv_repo() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if env_path.is_file():
+        load_dotenv(env_path)
+
+
+def llm_annotate_ambiguous_columns(
+    column_profiles: dict[str, dict],
+    df: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    """
+    Optional LLM pass for high-cardinality object columns and odd confidence scales.
+    Uses OpenRouter (preferred) or OpenAI chat completions when API keys are set.
+    """
+    ambiguous: list[str] = []
+    for col, prof in column_profiles.items():
+        dt = str(prof.get("dtype", ""))
+        nuniq = int(prof.get("cardinality_estimate", 0) or 0)
+        if dt == "object" and nuniq > 50:
+            ambiguous.append(col)
+        elif "confidence" in col.lower() and prof.get("stats"):
+            m = float(prof["stats"].get("mean", 0.0))
+            if m > 1.0 or (m == 0.0 and nuniq > 2):
+                ambiguous.append(col)
+    if not ambiguous:
+        return []
+
+    _load_dotenv_repo()
+    or_key = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
+    oa_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    if not or_key and not oa_key:
+        return [
+            {
+                "column": col,
+                "note": "ambiguous_column_pending_llm_set_OPENROUTER_or_OPENAI_key",
+            }
+            for col in ambiguous[:8]
+        ]
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return [{"note": "openai package required: uv sync --extra ai", "columns": ambiguous[:8]}]
+
+    if or_key:
+        client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=or_key,
+            default_headers={
+                "HTTP-Referer": (os.environ.get("OPENROUTER_HTTP_REFERER") or "https://localhost").strip(),
+                "X-Title": (os.environ.get("OPENROUTER_APP_TITLE") or "data-contract-enforcer").strip(),
+            },
+        )
+        model = "openai/gpt-4o-mini"
+    else:
+        client = OpenAI(api_key=oa_key)
+        model = "gpt-4o-mini"
+
+    cols = ambiguous[:12]
+    prompt = (
+        "You help data contracts. For each column, suggest json-schema-like type "
+        "(string|number|integer|boolean) and one-line risk if used as contract field.\n"
+        "Columns:\n"
+        + "\n".join(f"- {c}" for c in cols)
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=900,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        return [{"columns": cols, "error": str(e), "model": model}]
+
+    return [
+        {
+            "ambiguous_columns": cols,
+            "model": model,
+            "summary": text[:6000],
+        }
+    ]
 
 
 def soda_checks_for_table(table_key: str, id_col: str) -> dict[str, Any]:
@@ -347,6 +444,7 @@ def build_bitol_contract(
     quality: dict[str, Any],
     lineage: dict[str, Any],
     extra_terms: str | None = None,
+    llm_annotations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "kind": "DataContract",
@@ -376,8 +474,8 @@ def build_bitol_contract(
         "quality": quality,
         "lineage": lineage,
         "generation": {
-            "pipeline": "structural+statistical profiling, lineage injection, optional ydata-profiling",
-            "llm_annotations": [],
+            "pipeline": "structural+statistical profiling, lineage injection, optional ydata-profiling, optional LLM",
+            "llm_annotations": list(llm_annotations or []),
         },
     }
 
@@ -394,6 +492,16 @@ def parse_args() -> argparse.Namespace:
         "--ydata-profile",
         action="store_true",
         help="Write ydata-profiling HTML under schema_snapshots/profiles/",
+    )
+    p.add_argument(
+        "--skip-llm",
+        action="store_true",
+        help="Do not call LLM for ambiguous columns (faster, offline).",
+    )
+    p.add_argument(
+        "--skip-baselines-write",
+        action="store_true",
+        help="Do not write schema_snapshots/baselines.json (runner can still write baselines).",
     )
     return p.parse_args()
 
@@ -444,6 +552,13 @@ def main() -> int:
     column_profiles = {col: profile_column(df[col], col) for col in df.columns}
     schema_fields = build_schema_dict(column_profiles, df)
 
+    llm_notes: list[dict[str, Any]] = []
+    if not args.skip_llm:
+        llm_notes = llm_annotate_ambiguous_columns(column_profiles, df)
+
+    if not args.skip_baselines_write and len(df) > 0:
+        write_baselines(df, Path("schema_snapshots/baselines.json"))
+
     id_col = "doc_id" if "doc_id" in df.columns else "event_id" if "event_id" in df.columns else list(df.columns)[0]
     quality = soda_checks_for_table(file_stem, id_col)
     qlist = quality["specification"][f"checks for {file_stem}"]
@@ -461,6 +576,7 @@ def main() -> int:
         schema_fields=schema_fields,
         quality=quality,
         lineage={"upstream": [], "downstream": []},
+        llm_annotations=llm_notes,
     )
     contract = inject_lineage(contract, args.lineage, fields_consumed=fields_for_lineage or list(schema_fields.keys())[:5])
 

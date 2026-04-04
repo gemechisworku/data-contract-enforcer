@@ -103,5 +103,6 @@ lineage:
   downstream: []
   downstream_consumers: []
 generation:
-  pipeline: structural+statistical profiling, lineage injection, optional ydata-profiling
+  pipeline: structural+statistical profiling, lineage injection, optional ydata-profiling,
+    optional LLM
   llm_annotations: []

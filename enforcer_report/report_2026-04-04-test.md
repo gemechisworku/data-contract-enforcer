@@ -1,6 +1,6 @@
 # Enforcer Report
 
-**Generated:** 2026-04-04T20:17:32.306909Z  
+**Generated:** 2026-04-04T20:15:17.598762Z  
 
 **Period:** 2026-03-28 to 2026-04-04 (schema context: last 7 days)
 

@@ -98,6 +98,82 @@ def compute_transitive_depth(
     }
 
 
+def upstream_trace_to_producer_files(
+    failing_field: str,
+    lineage_path: str | Path,
+    *,
+    max_hops: int = 12,
+) -> dict[str, Any]:
+    """
+    Walk edges **upstream** (consumer/target → producer/source) toward FILE:: producers.
+    Seeds start nodes from nodes whose id/label/path matches the failing field name, else TABLE/EXTERNAL nodes.
+    """
+    path = Path(lineage_path)
+    with open(path, encoding="utf-8") as f:
+        lines = [ln for ln in f if ln.strip()]
+    if not lines:
+        return {"producer_files": [], "edge_paths": [], "start_nodes": [], "hop_count": 0}
+    snapshot = json.loads(lines[-1])
+    nodes = snapshot.get("nodes") or []
+    edges_raw = snapshot.get("edges") or []
+    fl = failing_field.lower()
+    starts: list[str] = []
+    for n in nodes:
+        nid = str(n.get("node_id") or n.get("id") or "")
+        lab = str(n.get("label") or "")
+        meta = n.get("metadata") if isinstance(n.get("metadata"), dict) else {}
+        mp = str((meta or {}).get("path") or "")
+        if fl in nid.lower() or fl in lab.lower() or fl in mp.lower():
+            starts.append(nid)
+    if not starts:
+        for n in nodes:
+            t = str(n.get("type", "")).upper()
+            if t in ("TABLE", "EXTERNAL", "MODEL"):
+                nid = str(n.get("node_id") or n.get("id") or "")
+                if nid:
+                    starts.append(nid)
+    starts = list(dict.fromkeys([s for s in starts if s]))[:8]
+    if not starts:
+        return {"producer_files": [], "edge_paths": [], "start_nodes": [], "hop_count": 0}
+
+    visited: set[str] = set()
+    frontier = set(starts)
+    edge_paths: list[str] = []
+    producer_files: list[str] = []
+    hops = 0
+    for _ in range(max_hops):
+        next_frontier: set[str] = set()
+        for edge in edges_raw:
+            tgt = str(edge.get("target") or "")
+            src = str(edge.get("source") or "")
+            rel = str(edge.get("relationship") or edge.get("edge_type") or "").upper()
+            if tgt in frontier and src:
+                if rel in _DATAFLOW_REL or rel in ("PRODUCES", "WRITES", "CONSUMES", ""):
+                    if src not in visited:
+                        next_frontier.add(src)
+                        edge_paths.append(f"{src} --{rel or 'DATAFLOW'}--> {tgt}")
+                        if "FILE::" in src:
+                            producer_files.append(src)
+        visited |= frontier
+        frontier = next_frontier - visited
+        hops += 1
+        if not frontier:
+            break
+
+    return {
+        "producer_files": list(dict.fromkeys(producer_files)),
+        "edge_paths": edge_paths[:48],
+        "start_nodes": starts,
+        "hop_count": hops,
+    }
+
+
+def _repo_relative_from_file_node(node_id: str) -> str | None:
+    if "FILE::" not in node_id:
+        return None
+    return node_id.split("FILE::", 1)[1].strip() or None
+
+
 def get_recent_commits(file_path: str, repo_root: str | Path, days: int = 14) -> list[dict[str, str]]:
     """Step 3a: Git commits touching file_path (best-effort; empty if not a git repo)."""
     root = Path(repo_root)
@@ -167,22 +243,28 @@ def write_violation(
     check_result: dict[str, Any],
     registry_blast: list[dict[str, Any]],
     lineage_enrichment: dict[str, Any],
+    upstream_trace: dict[str, Any],
     blame_chain: list[dict[str, Any]],
     out_path: str | Path,
 ) -> None:
     """Step 4: Append structured violation entry to JSONL log."""
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    base_depth = int(lineage_enrichment.get("max_depth") or 0)
+    hop_depth = int(upstream_trace.get("hop_count") or 0)
     entry = {
         "violation_id": str(uuid.uuid4()),
         "check_id": check_result.get("check_id", "unknown"),
         "detected_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "blast_radius": {
-            "source": "registry",
+            "source": "registry_then_lineage",
             "direct_subscribers": registry_blast,
             "transitive_nodes": lineage_enrichment.get("transitive", []),
-            "contamination_depth": lineage_enrichment.get("max_depth", 0),
-            "note": "direct_subscribers from registry; transitive_nodes from lineage graph enrichment",
+            "upstream_producer_nodes": upstream_trace.get("producer_files", []),
+            "pipeline_edges": upstream_trace.get("edge_paths", [])[:24],
+            "upstream_start_nodes": upstream_trace.get("start_nodes", []),
+            "contamination_depth": base_depth + hop_depth,
+            "note": "Registry subscribers first; upstream FILE:: producers from reverse edge walk; depth adds forward max_depth + upstream hops.",
         },
         "blame_chain": blame_chain,
         "records_failing": check_result.get("records_failing", 0),
@@ -199,8 +281,9 @@ def build_check_result(
     """Normalize a ValidationRunner statistical/structural finding into check_result shape."""
     chk = finding.get("check", "unknown")
     field = finding.get("field", "")
+    cid = finding.get("check_id") or (f"{chk}:{field}" if field else str(chk))
     return {
-        "check_id": f"{chk}:{field}" if field else str(chk),
+        "check_id": cid,
         "check": chk,
         "field": field,
         "severity": finding.get("severity") or finding.get("status"),
@@ -229,18 +312,25 @@ def attribute_finding(
     """
     field = str(finding.get("field", ""))
     blast = registry_blast_radius(contract_id, field, registry_path)
+    upstream = upstream_trace_to_producer_files(field, lineage_path)
     lineage = compute_transitive_depth(producer_node_id, lineage_path, max_depth=max_depth)
-    dist = float(lineage.get("max_depth") or 0)
+    dist = float(lineage.get("max_depth") or 0) + float(upstream.get("hop_count") or 0)
     ts = violation_ts or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     blame: list[dict[str, Any]] = []
-    if repo_root and data_file_for_blame:
-        commits = get_recent_commits(data_file_for_blame, repo_root)
+    blame_path = data_file_for_blame
+    if upstream.get("producer_files"):
+        rel = _repo_relative_from_file_node(upstream["producer_files"][0])
+        if rel:
+            blame_path = rel
+    if repo_root and blame_path:
+        commits = get_recent_commits(blame_path, repo_root)
         blame = score_candidates(commits, ts, dist)
     check_result = build_check_result(finding, records_failing=finding.get("records_failing", 0))
-    write_violation(check_result, blast, lineage, blame, violation_out)
+    write_violation(check_result, blast, lineage, upstream, blame, violation_out)
     return {
         "registry_blast_radius": blast,
         "lineage_enrichment": lineage,
+        "upstream_trace": upstream,
         "blame_chain": blame,
         "written_to": str(violation_out),
     }
@@ -249,14 +339,17 @@ def attribute_finding(
 def _pick_failures(report: dict[str, Any]) -> list[dict[str, Any]]:
     """Statistical/structural rows that represent failures (not PASS drift noise)."""
     out: list[dict[str, Any]] = []
-    for section in ("structural", "statistical"):
-        for row in report.get(section, []) or []:
-            sev = (row.get("severity") or "").upper()
-            st = (row.get("status") or "").upper()
-            if row.get("check") == "statistical_drift" and st == "PASS":
-                continue
-            if sev in ("CRITICAL", "FAIL") or st == "FAIL":
-                out.append(row)
+    if report.get("results"):
+        rows_iter: list[dict[str, Any]] = list(report["results"])
+    else:
+        rows_iter = list(report.get("structural") or []) + list(report.get("statistical") or [])
+    for row in rows_iter:
+        sev = (row.get("severity") or "").upper()
+        st = (row.get("status") or "").upper()
+        if row.get("check") == "statistical_drift" and st == "PASS":
+            continue
+        if sev in ("CRITICAL", "FAIL", "HIGH") or st in ("FAIL", "ERROR"):
+            out.append(row)
     return out
 
 

@@ -18,6 +18,7 @@ import json
 import os
 import random
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -318,6 +319,37 @@ def check_output_violation_rate(
 # --- Helpers ---
 
 
+def append_violation_log_warn(entry: dict[str, Any], path: Path) -> None:
+    """Append one WARN record to the shared violation log (JSONL)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rec = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        **entry,
+    }
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def default_week3_extractions_path() -> Path | None:
+    for p in (
+        Path("outputs/week3/extractions.jsonl"),
+        Path("outputs/migrate/week3/extractions.jsonl"),
+    ):
+        if p.is_file():
+            return p
+    return None
+
+
+def default_week2_verdicts_path() -> Path | None:
+    for p in (
+        Path("outputs/week2/verdicts.jsonl"),
+        Path("outputs/migrate/week2/verdicts.jsonl"),
+    ):
+        if p.is_file():
+            return p
+    return None
+
+
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     with open(path, encoding="utf-8") as f:
@@ -417,6 +449,12 @@ def main() -> int:
     )
     p_out.add_argument("--baseline-rate", type=float, default=None)
     p_out.add_argument("--warn-threshold", type=float, default=0.02)
+    p_out.add_argument(
+        "--violation-log",
+        type=Path,
+        default=Path("violation_log/violations.jsonl"),
+        help="Append WARN when violation rate exceeds threshold",
+    )
 
     p_all = sub.add_parser("run-all", help="Run extension 2 + 3 on paths; extension 1 if --extractions set")
     p_all.add_argument(
@@ -444,6 +482,12 @@ def main() -> int:
     p_all.add_argument("--baseline", type=Path, default=Path("schema_snapshots/embedding_baselines.npz"))
     p_all.add_argument("--quarantine", type=Path, default=Path("outputs/quarantine"))
     p_all.add_argument("--embedding-model", default=None)
+    p_all.add_argument(
+        "--violation-log",
+        type=Path,
+        default=Path("violation_log/violations.jsonl"),
+        help="Append WARN for high LLM output violation rate (extension 3)",
+    )
 
     args = p.parse_args()
     try:
@@ -477,13 +521,28 @@ def main() -> int:
                 baseline_rate=args.baseline_rate,
                 warn_threshold=args.warn_threshold,
             )
+            if r.get("status") == "WARN":
+                append_violation_log_warn(
+                    {
+                        "severity": "WARN",
+                        "check": "llm_output_schema_violation_rate",
+                        "violation_rate": r.get("violation_rate"),
+                        "trend": r.get("trend"),
+                        "total_outputs": r.get("total_outputs"),
+                        "source_jsonl": str(args.jsonl),
+                    },
+                    args.violation_log,
+                )
             print(json.dumps(r, indent=2))
             return 0 if r.get("status") == "PASS" else 1
 
         if args.cmd == "run-all":
             report: dict[str, Any] = {"embedding_drift": None, "prompt_validation": None, "output_violation_rate": None}
-            if args.week3_jsonl and args.week3_jsonl.is_file():
-                recs = load_jsonl(args.week3_jsonl)
+            w3 = args.week3_jsonl
+            if w3 is None or not w3.is_file():
+                w3 = default_week3_extractions_path()
+            if w3 is not None and w3.is_file():
+                recs = load_jsonl(w3)
                 texts = extract_fact_texts_from_week3(recs)
                 report["embedding_drift"] = check_embedding_drift(
                     texts,
@@ -496,13 +555,29 @@ def main() -> int:
                     WEEK3_PROMPT_SCHEMA,
                     quarantine_path=args.quarantine,
                 )
-            if args.verdicts_jsonl and args.verdicts_jsonl.is_file():
-                verdicts = load_jsonl(args.verdicts_jsonl)
+            vj = args.verdicts_jsonl
+            if vj is None or not vj.is_file():
+                vj = default_week2_verdicts_path()
+            if vj is not None and vj.is_file():
+                verdicts = load_jsonl(vj)
                 report["output_violation_rate"] = check_output_violation_rate(
                     verdicts,
                     "overall_verdict",
                     ("PASS", "FAIL", "WARN"),
                 )
+                ov = report["output_violation_rate"]
+                if isinstance(ov, dict) and ov.get("status") == "WARN":
+                    append_violation_log_warn(
+                        {
+                            "severity": "WARN",
+                            "check": "llm_output_schema_violation_rate",
+                            "violation_rate": ov.get("violation_rate"),
+                            "trend": ov.get("trend"),
+                            "total_outputs": ov.get("total_outputs"),
+                            "source_jsonl": str(vj),
+                        },
+                        args.violation_log,
+                    )
             out_report = dict(report)
             pv = out_report.get("prompt_validation")
             if isinstance(pv, dict) and "records" in pv:

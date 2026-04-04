@@ -1,0 +1,72 @@
+{
+  "runner": "ValidationRunner",
+  "timestamp_utc": "2026-04-04T20:11:14.048431Z",
+  "structural": [],
+  "statistical": [
+    {
+      "check": "statistical_drift",
+      "field": "processing_time_ms",
+      "status": "PASS",
+      "z_score": 0.0,
+      "check_id": "statistical_drift:processing_time_ms",
+      "severity": "LOW",
+      "actual_value": {
+        "z_score": 0.0
+      },
+      "expected": "mean within baseline band (warn >2 stddev, fail >3 stddev)",
+      "message": ""
+    },
+    {
+      "check": "statistical_drift",
+      "field": "fact_confidence",
+      "status": "PASS",
+      "z_score": 0.0,
+      "check_id": "statistical_drift:fact_confidence",
+      "severity": "LOW",
+      "actual_value": {
+        "z_score": 0.0
+      },
+      "expected": "mean within baseline band (warn >2 stddev, fail >3 stddev)",
+      "message": ""
+    }
+  ],
+  "errors": [],
+  "overall": "PASS",
+  "report_id": "41a21079-ddfd-40d0-8849-2fd7adcc9243",
+  "contract_id": "week3-document-refinery-extractions",
+  "snapshot_id": "snap_290b99c32917cdfa",
+  "run_timestamp": "2026-04-04T20:11:14.048431Z",
+  "total_checks": 2,
+  "passed": 2,
+  "failed": 0,
+  "warned": 0,
+  "errored": 0,
+  "results": [
+    {
+      "check": "statistical_drift",
+      "field": "processing_time_ms",
+      "status": "PASS",
+      "z_score": 0.0,
+      "check_id": "statistical_drift:processing_time_ms",
+      "severity": "LOW",
+      "actual_value": {
+        "z_score": 0.0
+      },
+      "expected": "mean within baseline band (warn >2 stddev, fail >3 stddev)",
+      "message": ""
+    },
+    {
+      "check": "statistical_drift",
+      "field": "fact_confidence",
+      "status": "PASS",
+      "z_score": 0.0,
+      "check_id": "statistical_drift:fact_confidence",
+      "severity": "LOW",
+      "actual_value": {
+        "z_score": 0.0
+      },
+      "expected": "mean within baseline band (warn >2 stddev, fail >3 stddev)",
+      "message": ""
+    }
+  ]
+}
